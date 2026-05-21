@@ -66,7 +66,12 @@ pipeline {
         string(
             name: 'EMAIL_RECIPIENTS',
             defaultValue: 'usman.arshad@rolustech.com',
-            description: 'Comma-separated recipient list'
+            description: 'Primary comma-separated recipients for the report email'
+        )
+        string(
+            name: 'ADDITIONAL_EMAIL_RECIPIENTS',
+            defaultValue: '',
+            description: 'Extra comma-separated recipients added to To (merged with EMAIL_RECIPIENTS)'
         )
         booleanParam(
             name: 'USE_DAKOTA_CREDENTIALS',
@@ -320,8 +325,25 @@ print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + 
 <p style="color:#64748b;font-size:12px;">Excel metrics attached when generated.</p>
 </body></html>"""
 
+                    def emailToList = []
+                    [params.EMAIL_RECIPIENTS, params.ADDITIONAL_EMAIL_RECIPIENTS].each { raw ->
+                        if (raw?.trim()) {
+                            raw.split(',').each { addr ->
+                                def trimmed = addr.trim()
+                                if (trimmed && !emailToList.contains(trimmed)) {
+                                    emailToList << trimmed
+                                }
+                            }
+                        }
+                    }
+                    def emailTo = emailToList.join(', ')
+                    if (!emailTo) {
+                        error('SEND_EMAIL is enabled but no recipients in EMAIL_RECIPIENTS or ADDITIONAL_EMAIL_RECIPIENTS.')
+                    }
+                    echo "Email To: ${emailTo}"
+
                     emailext(
-                        to: "${params.EMAIL_RECIPIENTS}",
+                        to: "${emailTo}",
                         subject: "Dakota GPT Performance | ${marketLabel} | ${modeLabel} | ${dateStr}",
                         mimeType: 'text/html',
                         attachmentsPattern: 'Performance evaluation results.xlsx',
