@@ -1,0 +1,25 @@
+# Secrets and local env
+.env
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# IDE
+.idea/
+
+# Test artifacts
+screenshots/
+allure-results/
+allure-report/
+report_link_api_responses.log
+
+# Excel lock files
+~$*.xlsx
+
+# OS
+Thumbs.db
+.DS_Store
