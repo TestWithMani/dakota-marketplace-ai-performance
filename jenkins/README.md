@@ -40,6 +40,8 @@ Script Path: `Jenkinsfile`
 | `RUNS_PER_OBJECT` | Samples per object (default 3) |
 | `GENERATE_ALLURE` | Build HTML report |
 | `SEND_EMAIL` | Email summary + Excel |
+| `EMAIL_RECIPIENTS` | Primary To list (comma-separated) |
+| `ADDITIONAL_EMAIL_RECIPIENTS` | Extra To addresses merged with primary list |
 | `USE_DAKOTA_CREDENTIALS` | Use `sf-marketplace-creds` for login |
 
 ## Market URLs on the Jenkins agent (optional)
