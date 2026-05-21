@@ -1,128 +1,204 @@
-// Dakota GPT performance — smoke automation + Allure report + email summary.
+// Dakota GPT Performance — parameterized Pipeline (SCM: Jenkinsfile from GitHub)
 //
-// Jenkins setup:
-//   1. Checkout uses the public repo URL (no GitHub credentials required for clone)
-//   2. Update PYTHON_EXE, ALLURE_CMD, NODE_PATH, NPM_PATH for your Windows agent (or use agent tool env vars)
-//   3. Install Email Extension plugin for emailext
-//   4. Do NOT embed GitHub PATs in this file (rotate any token that was ever committed in plain text)
+// Jenkins job setup (one-time):
+//   1. Create Username/Password credential ID: dakota-marketplace-login (Dakota site user)
+//   2. Ensure Windows agent has Chrome (+ Edge/Firefox if used), Node, Allure CLI, Python 3.11+
+//   3. Optional: set agent tool paths below or define on the agent as env vars
+//
+// Do NOT store Jenkins or Dakota passwords in this file.
 
 pipeline {
     agent any
 
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '10'))
+        timeout(time: 180, unit: 'MINUTES')
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        booleanParam(
+            name: 'SMOKE_ONLY',
+            defaultValue: true,
+            description: 'Run only Prompts.csv rows where Marker=smoke'
+        )
+        choice(
+            name: 'BROWSER',
+            choices: ['chrome', 'edge', 'firefox'],
+            description: 'Browser engine (Chrome recommended on Windows agent)'
+        )
+        booleanParam(
+            name: 'HEADLESS',
+            defaultValue: false,
+            description: 'Run browser headless (use true on agents without a display)'
+        )
+        string(
+            name: 'RESPONSE_TIMEOUT',
+            defaultValue: '100',
+            description: 'Max seconds to wait for a report link per prompt'
+        )
+        string(
+            name: 'RUNS_PER_OBJECT',
+            defaultValue: '3',
+            description: 'Performance timing samples per object type'
+        )
+        booleanParam(
+            name: 'GENERATE_ALLURE',
+            defaultValue: true,
+            description: 'Generate HTML Allure report after the run'
+        )
+        booleanParam(
+            name: 'SEND_EMAIL',
+            defaultValue: true,
+            description: 'Send summary email with Excel attachment'
+        )
+        string(
+            name: 'EMAIL_RECIPIENTS',
+            defaultValue: 'wishma.khurram@rolustech.com',
+            description: 'Comma-separated recipient list'
+        )
+        booleanParam(
+            name: 'USE_DAKOTA_CREDENTIALS',
+            defaultValue: true,
+            description: 'Inject DAKOTA_USERNAME/PASSWORD from Jenkins credential dakota-marketplace-login'
+        )
+        string(
+            name: 'GIT_BRANCH',
+            defaultValue: 'main',
+            description: 'Branch to build (when not using multibranch)'
+        )
+    }
+
     environment {
-        PYTHON_EXE = 'C:\\Users\\wishma.khurram\\AppData\\Local\\Programs\\Python\\Python312\\python.exe'
-        ALLURE_CMD = 'C:\\Users\\wishma.khurram\\AppData\\Roaming\\npm\\allure.cmd'
-        NODE_PATH  = 'C:\\Program Files\\nodejs'
-        NPM_PATH   = 'C:\\Users\\wishma.khurram\\AppData\\Roaming\\npm'
-        // Optional: set in Jenkins job or .env on the agent (recommended for secrets)
-        // DAKOTA_BASE_URL, DAKOTA_USERNAME, DAKOTA_PASSWORD
+        NODE_PATH  = "${env.NODE_PATH ?: 'C:\\Program Files\\nodejs'}"
+        NPM_PATH   = "${env.NPM_PATH ?: 'C:\\Users\\wishma.khurram\\AppData\\Roaming\\npm'}"
+        VENV_PY    = "${WORKSPACE}\\venv\\Scripts\\python.exe"
+        ALLURE_CMD = "${env.ALLURE_CMD ?: 'allure'}"
+        REPO_URL   = 'https://github.com/TestWithMani/dakota_gpt_performance.git'
     }
 
     stages {
+
+        stage('Initialize') {
+            steps {
+                script {
+                    currentBuild.description = "smoke=${params.SMOKE_ONLY} | ${params.BROWSER} | headless=${params.HEADLESS}"
+                    echo "Parameters: SMOKE_ONLY=${params.SMOKE_ONLY}, BROWSER=${params.BROWSER}, HEADLESS=${params.HEADLESS}"
+                    echo "TIMEOUT=${params.RESPONSE_TIMEOUT}, RUNS=${params.RUNS_PER_OBJECT}"
+                }
+            }
+        }
 
         stage('Checkout') {
             steps {
                 checkout([
                     $class: 'GitSCM',
-                    branches: [[name: '*/main']],
-                    userRemoteConfigs: [[
-                        url: 'https://github.com/TestWithMani/dakota_gpt_performance.git'
-                    ]]
+                    branches: [[name: "*/${params.GIT_BRANCH}"]],
+                    userRemoteConfigs: [[url: "${REPO_URL}"]],
+                    extensions: [[$class: 'CloneOption', shallow: true, depth: 1]]
                 ])
             }
         }
 
         stage('Setup Python') {
             steps {
-                bat """
+                bat '''
                     @echo off
                     cd /d "%WORKSPACE%"
-
-                    "${PYTHON_EXE}" -m venv venv
+                    python -m venv venv
                     call venv\\Scripts\\activate.bat
-
                     python -m pip install --upgrade pip
                     pip install -r requirements.txt
                     pip install pytest allure-pytest
-                """
+                    python --version
+                '''
             }
         }
 
-        stage('Run Smoke Only') {
-            options {
-                timeout(time: 120, unit: 'MINUTES')
-            }
-
+        stage('Run Dakota Automation') {
             steps {
-                withEnv([
-                    "PATH=${NODE_PATH};${NPM_PATH};${PATH}"
-                ]) {
-                    bat """
+                script {
+                    def smokeFlag = params.SMOKE_ONLY ? '--smoke' : ''
+                    def headlessFlag = params.HEADLESS ? '--headless' : ''
+                    def cmd = """
                         @echo off
                         cd /d "%WORKSPACE%"
                         call venv\\Scripts\\activate.bat
-
+                        set PATH=${NODE_PATH};${NPM_PATH};%PATH%
                         if exist allure-results rmdir /s /q allure-results
                         if exist allure-report  rmdir /s /q allure-report
-
-                        echo Running SMOKE ONLY...
-                        python -u chatbot_tester.py --smoke
+                        echo Running automation...
+                        "%VENV_PY%" -u chatbot_tester.py ${smokeFlag} ${headlessFlag} --browser ${params.BROWSER} --timeout ${params.RESPONSE_TIMEOUT} --runs ${params.RUNS_PER_OBJECT}
                         echo Exit code: %ERRORLEVEL%
                         if errorlevel 1 exit /b %ERRORLEVEL%
-
-                        echo Smoke run completed.
                     """
+                    if (params.USE_DAKOTA_CREDENTIALS) {
+                        withCredentials([
+                            usernamePassword(
+                                credentialsId: 'dakota-marketplace-login',
+                                usernameVariable: 'DAKOTA_USERNAME',
+                                passwordVariable: 'DAKOTA_PASSWORD'
+                            )
+                        ]) {
+                            withEnv([
+                                "DAKOTA_USERNAME=${DAKOTA_USERNAME}",
+                                "DAKOTA_PASSWORD=${DAKOTA_PASSWORD}",
+                                "BROWSER=${params.BROWSER}"
+                            ]) {
+                                bat cmd
+                            }
+                        }
+                    } else {
+                        withEnv(["BROWSER=${params.BROWSER}"]) {
+                            bat cmd
+                        }
+                    }
                 }
             }
         }
 
         stage('Generate Allure Report') {
+            when {
+                expression { return params.GENERATE_ALLURE }
+            }
             steps {
-                withEnv([
-                    "PATH=${NODE_PATH};${NPM_PATH};${PATH}"
-                ]) {
-                    bat """
-                        @echo off
-                        cd /d "%WORKSPACE%"
-
-                        echo === Verifying Node.js ===
-                        node --version
-                        if errorlevel 1 (
-                            echo ERROR: node not found even after PATH update!
-                            exit /b 1
-                        )
-
-                        echo === Checking allure-results ===
-                        if not exist allure-results (
-                            echo ERROR: allure-results folder missing.
-                            exit /b 1
-                        )
-
-                        echo === Generating Allure Report ===
-                        "%ALLURE_CMD%" generate allure-results --clean -o allure-report
-
-                        echo === Report generated. Contents: ===
-                        dir allure-report
-                    """
-                }
+                bat '''
+                    @echo off
+                    cd /d "%WORKSPACE%"
+                    set PATH=%NODE_PATH%;%NPM_PATH%;%PATH%
+                    if not exist allure-results (
+                        echo ERROR: allure-results folder missing.
+                        exit /b 1
+                    )
+                    node --version
+                    call "%ALLURE_CMD%" generate allure-results --clean -o allure-report
+                    if errorlevel 1 exit /b 1
+                    dir allure-report
+                '''
             }
         }
 
-        stage('Archive Allure Report') {
+        stage('Archive Reports') {
+            when {
+                expression { return params.GENERATE_ALLURE }
+            }
             steps {
-                archiveArtifacts artifacts: 'allure-report/**',
+                archiveArtifacts artifacts: 'allure-report/**,Performance evaluation results.xlsx',
                     fingerprint: true,
                     allowEmptyArchive: true
             }
         }
 
-        stage('Parse Results and Send Email') {
+        stage('Send Email Report') {
+            when {
+                expression { return params.SEND_EMAIL }
+            }
             steps {
                 script {
-
                     def pyScript = """
 import os, json
-results_dir = r'${env.WORKSPACE}\\allure-results'
+results_dir = r'${env.WORKSPACE}\\\\allure-results'
 total = passed = failed = skipped = 0
 failed_names = []
 if os.path.exists(results_dir):
@@ -143,147 +219,52 @@ if os.path.exists(results_dir):
 failed_names_str = '|'.join(failed_names) if failed_names else ''
 print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + ',' + failed_names_str)
 """
-                    def pyFile = "${env.WORKSPACE}\\parse_results.py"
-                    writeFile file: pyFile, text: pyScript
-
+                    writeFile file: 'parse_results.py', text: pyScript
                     def result = bat(
-                        script: "@\"${env.PYTHON_EXE}\" \"${pyFile}\"",
+                        script: "@\"${VENV_PY}\" parse_results.py",
                         returnStdout: true
                     ).trim()
 
                     def lastLine = result.readLines().last().trim()
-
-                    def total       = 0
-                    def passed      = 0
-                    def failed      = 0
-                    def skipped     = 0
-                    def failedNames = ""
-
+                    def total = 0, passed = 0, failed = 0, skipped = 0, failedNames = ''
                     def p1 = lastLine.indexOf(',')
                     def p2 = lastLine.indexOf(',', p1 + 1)
                     def p3 = lastLine.indexOf(',', p2 + 1)
                     def p4 = lastLine.indexOf(',', p3 + 1)
-
                     if (p4 > 0) {
-                        total       = lastLine.substring(0, p1).toInteger()
-                        passed      = lastLine.substring(p1 + 1, p2).toInteger()
-                        failed      = lastLine.substring(p2 + 1, p3).toInteger()
-                        skipped     = lastLine.substring(p3 + 1, p4).toInteger()
+                        total = lastLine.substring(0, p1).toInteger()
+                        passed = lastLine.substring(p1 + 1, p2).toInteger()
+                        failed = lastLine.substring(p2 + 1, p3).toInteger()
+                        skipped = lastLine.substring(p3 + 1, p4).toInteger()
                         failedNames = lastLine.substring(p4 + 1).replace('|', ', ')
-                    } else if (p3 > 0) {
-                        total   = lastLine.substring(0, p1).toInteger()
-                        passed  = lastLine.substring(p1 + 1, p2).toInteger()
-                        failed  = lastLine.substring(p2 + 1, p3).toInteger()
-                        skipped = lastLine.substring(p3 + 1).toInteger()
                     }
 
-                    echo "DEBUG: total=${total} passed=${passed} failed=${failed} skipped=${skipped} failedNames=${failedNames}"
+                    def passedPct = total > 0 ? (int)((passed * 100) / total) : 0
+                    def failedList = failed > 0 ? "${failed} failed: ${failedNames}" : 'No failures detected.'
+                    def allureUrl = "${env.BUILD_URL}artifact/allure-report/index.html"
+                    def duration = currentBuild.durationString
+                    def dateStr = new Date().format('yyyy-MM-dd')
+                    def modeLabel = params.SMOKE_ONLY ? 'Smoke' : 'Full'
 
-                    def passedPct  = total > 0 ? (int)((passed * 100) / total) : 0
-                    def failedList = failed > 0 ? (failed.toString() + " test(s) failed: " + failedNames) : "No failed tests or tab timeouts were detected in this run."
-                    def allureUrl  = env.BUILD_URL + "artifact/allure-report/index.html"
-                    def duration   = currentBuild.durationString
-                    def dateStr    = new Date().format('yyyy-MM-dd')
-
-                    def emailBody = """<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>Dakota Performance Report</title>
-</head>
-<body style="margin:0;padding:0;background:linear-gradient(140deg,#e0ecff 0%,#efe7ff 45%,#fff6e5 100%);font-family:'Segoe UI',Roboto,Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0">
-    <tr>
-      <td align="center" style="padding:24px;">
-        <table width="760" cellpadding="0" cellspacing="0"
-          style="background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #dbe3ee;box-shadow:0 14px 32px rgba(30,64,175,0.14);">
-          <tr>
-            <td style="padding:26px 30px;background:linear-gradient(135deg,#0f172a 0%,#1e40af 52%,#7c3aed 100%);color:#ffffff;">
-              <h2 style="margin:0;font-size:26px;letter-spacing:0.2px;">
-                Dakota GPT JOE BOT Performance
-              </h2>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:24px 30px 10px;">
-              <h3 style="margin:0 0 12px;color:#0f172a;font-size:17px;">Build Details</h3>
-              <table width="100%" cellpadding="8" cellspacing="8" style="font-size:13px;margin-bottom:12px;">
-                <tr align="center">
-                  <td style="background:linear-gradient(180deg,#ccfbf1 0%,#99f6e4 100%);color:#134e4a;border-radius:12px;box-shadow:0 6px 14px rgba(20,184,166,0.22);">
-                    <div style="font-size:11px;letter-spacing:0.4px;">TOTAL</div>
-                    <div style="font-size:24px;font-weight:800;">""" + total + """</div>
-                  </td>
-                  <td style="background:linear-gradient(180deg,#dcfce7 0%,#86efac 100%);color:#14532d;border-radius:12px;box-shadow:0 6px 14px rgba(34,197,94,0.25);">
-                    <div style="font-size:11px;letter-spacing:0.4px;">PASSED</div>
-                    <div style="font-size:24px;font-weight:800;">""" + passed + """</div>
-                  </td>
-                  <td style="background:linear-gradient(180deg,#fee2e2 0%,#fca5a5 100%);color:#7f1d1d;border-radius:12px;box-shadow:0 6px 14px rgba(239,68,68,0.22);">
-                    <div style="font-size:11px;letter-spacing:0.4px;">FAILED</div>
-                    <div style="font-size:24px;font-weight:800;">""" + failed + """</div>
-                  </td>
-                  <td style="background:linear-gradient(180deg,#ede9fe 0%,#c4b5fd 100%);color:#4c1d95;border-radius:12px;box-shadow:0 6px 14px rgba(124,58,237,0.22);">
-                    <div style="font-size:11px;letter-spacing:0.4px;">SKIPPED</div>
-                    <div style="font-size:24px;font-weight:800;">""" + skipped + """</div>
-                  </td>
-                </tr>
-              </table>
-              <table width="100%" cellpadding="0" cellspacing="0"
-                style="font-size:14px;color:#1e293b;border:1px solid #bfdbfe;border-radius:12px;overflow:hidden;background:linear-gradient(180deg,#f8fbff 0%,#ffffff 100%);table-layout:fixed;">
-                <tr>
-                  <td width="32%" style="padding:10px 12px;background:linear-gradient(180deg,#dbeafe 0%,#bfdbfe 100%);border-bottom:1px solid #bfdbfe;">
-                    <strong>Duration</strong>
-                  </td>
-                  <td style="padding:10px 12px;border-bottom:1px solid #dbe3f3;font-weight:600;color:#1e3a8a;">""" + duration + """</td>
-                </tr>
-                <tr>
-                  <td style="padding:10px 12px;background:linear-gradient(180deg,#dbeafe 0%,#bfdbfe 100%);border-bottom:1px solid #bfdbfe;">
-                    <strong>Passed Percentage</strong>
-                  </td>
-                  <td style="padding:10px 12px;border-bottom:1px solid #dbe3f3;font-weight:600;color:#15803d;">""" + passedPct + """%</td>
-                </tr>
-                <tr>
-                  <td style="padding:10px 12px;background:linear-gradient(180deg,#dbeafe 0%,#bfdbfe 100%);">
-                    <strong>Failed Tests / Affected Tabs</strong>
-                  </td>
-                  <td style="padding:10px 12px;font-weight:600;color:#15803d;">""" + failedList + """</td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:8px 30px 24px;">
-              <h3 style="margin:0 0 12px;color:#0f172a;font-size:17px;">Report Access</h3>
-              <table width="100%" cellpadding="0" cellspacing="0"
-                style="font-size:14px;color:#1e293b;border:1px solid #c4b5fd;border-radius:10px;overflow:hidden;background:linear-gradient(180deg,#faf5ff 0%,#f3f0ff 100%);">
-                <tr>
-                  <td width="32%" style="padding:10px 12px;background:linear-gradient(180deg,#ede9fe 0%,#ddd6fe 100%);">
-                    <strong>Allure Report</strong>
-                  </td>
-                  <td style="padding:10px 12px;">
-                    <a style="color:#6d28d9;text-decoration:underline;font-weight:700;" href=\"""" + allureUrl + """\">Open Allure Report</a>
-                  </td>
-                </tr>
-              </table>
-              <p style="margin:12px 0 0;color:#64748b;font-size:12px;">
-                Please see the attached Excel performance sheet for detailed run metrics.
-              </p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:13px 30px;background:#0f172a;color:#cbd5e1;font-size:12px;">
-              Jenkins CI/CD • Dakota Marketplace Test Framework
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"""
+                    def emailBody = """<!DOCTYPE html><html><body style="font-family:Segoe UI,Arial,sans-serif;">
+<h2>Dakota GPT Performance — ${modeLabel}</h2>
+<p><b>Build:</b> ${env.JOB_NAME} #${env.BUILD_NUMBER}<br/>
+<b>Browser:</b> ${params.BROWSER} (headless=${params.HEADLESS})<br/>
+<b>Duration:</b> ${duration}</p>
+<table cellpadding="8" style="border-collapse:collapse;">
+<tr><td><b>Total</b></td><td>${total}</td></tr>
+<tr><td><b>Passed</b></td><td>${passed} (${passedPct}%)</td></tr>
+<tr><td><b>Failed</b></td><td>${failed}</td></tr>
+<tr><td><b>Skipped</b></td><td>${skipped}</td></tr>
+</table>
+<p>${failedList}</p>
+<p><a href="${allureUrl}">Open Allure Report</a></p>
+<p style="color:#64748b;font-size:12px;">Excel metrics attached when generated.</p>
+</body></html>"""
 
                     emailext(
-                        to: 'wishma.khurram@rolustech.com',
-                        subject: "Dakota GPT Performance | " + dateStr,
+                        to: "${params.EMAIL_RECIPIENTS}",
+                        subject: "Dakota GPT Performance | ${modeLabel} | ${dateStr}",
                         mimeType: 'text/html',
                         attachmentsPattern: 'Performance evaluation results.xlsx',
                         body: emailBody
@@ -295,10 +276,13 @@ print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + 
 
     post {
         always {
-            echo "Pipeline finished."
+            echo "Build ${currentBuild.currentResult} — smoke=${params.SMOKE_ONLY}, browser=${params.BROWSER}"
+        }
+        success {
+            echo 'Pipeline completed successfully.'
         }
         failure {
-            echo "Pipeline failed — check console log and archived Allure report."
+            echo 'Pipeline failed — review console log and archived Allure report.'
         }
     }
 }

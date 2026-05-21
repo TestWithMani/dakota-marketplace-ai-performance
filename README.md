@@ -45,4 +45,15 @@ python chatbot_tester.py
 
 ## Jenkins
 
-Point the pipeline at this public repo — Jenkins checkout does not require GitHub credentials. You still need Dakota login secrets (`.env` or Jenkins env vars) for the smoke run.
+Parameterized pipeline: see `Jenkinsfile` and `jenkins/README.md`.
+
+1. Create credential ID **`dakota-marketplace-login`** (Dakota site username/password).
+2. Create job **`dakota-gpt-performance`** from SCM (`Jenkinsfile` on `main`).
+3. Run with parameters: **SMOKE_ONLY**, **BROWSER**, **HEADLESS**, etc.
+
+```powershell
+$env:JENKINS_URL = 'http://your-jenkins:8080'
+$env:JENKINS_USER = 'your-user'
+$env:JENKINS_PASSWORD = 'your-password'
+.\jenkins\create-pipeline-job.ps1
+```

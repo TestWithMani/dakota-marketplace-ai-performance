@@ -163,17 +163,38 @@ def _pick_rightmost_footer_send_button(buttons):
 # --- Browser setup ---
 
 
-def setup_driver(headless=False):
-    options = Options()
+def setup_driver(headless=False, browser="chrome"):
+    """Start Chrome, Edge, or Firefox (default: chrome)."""
+    browser_key = (browser or "chrome").strip().lower()
+    headless_args = []
     if headless:
-        options.add_argument("--headless=new")
-        options.add_argument("--window-size=1920,1080")
+        headless_args = ["--headless=new", "--window-size=1920,1080"]
     else:
-        options.add_argument("--start-maximized")
-    # Enable browser console logs so we can gate next prompt on Joe events.
+        headless_args = ["--start-maximized"]
+
+    if browser_key == "edge":
+        from selenium.webdriver.edge.options import Options as EdgeOptions
+
+        options = EdgeOptions()
+        for arg in headless_args:
+            options.add_argument(arg)
+        options.set_capability("ms:loggingPrefs", {"browser": "ALL"})
+        return webdriver.Edge(options=options)
+
+    if browser_key == "firefox":
+        from selenium.webdriver.firefox.options import Options as FirefoxOptions
+
+        options = FirefoxOptions()
+        if headless:
+            options.add_argument("-headless")
+        options.set_capability("moz:loggingPrefs", {"browser": "ALL"})
+        return webdriver.Firefox(options=options)
+
+    options = Options()
+    for arg in headless_args:
+        options.add_argument(arg)
     options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
-    driver = webdriver.Chrome(options=options)
-    return driver
+    return webdriver.Chrome(options=options)
 
 # --- Prompt loading ---
 
@@ -2186,6 +2207,15 @@ def wait_for_console_ready_event(driver, timeout_s=CONSOLE_EVENT_WAIT_SECONDS, s
     return False
 
 
+def _apply_run_overrides(response_timeout=None, runs_per_object=None):
+    """Override module-level timing settings (CLI / Jenkins env)."""
+    global RESPONSE_TIMEOUT, RUNS_PER_OBJECT
+    if response_timeout is not None:
+        RESPONSE_TIMEOUT = int(response_timeout)
+    if runs_per_object is not None:
+        RUNS_PER_OBJECT = int(runs_per_object)
+
+
 def _parse_cli_args(argv=None):
     parser = argparse.ArgumentParser(description="Dakota Joe chatbot prompt automation")
     parser.add_argument(
@@ -2196,7 +2226,25 @@ def _parse_cli_args(argv=None):
     parser.add_argument(
         "--headless",
         action="store_true",
-        help="Run Chrome without a visible browser window",
+        help="Run browser without a visible window",
+    )
+    parser.add_argument(
+        "--browser",
+        choices=("chrome", "edge", "firefox"),
+        default=os.getenv("BROWSER", "chrome"),
+        help="Browser engine (default: chrome)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help=f"Seconds to wait for report link (default: {RESPONSE_TIMEOUT})",
+    )
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=None,
+        help=f"Timing samples per object (default: {RUNS_PER_OBJECT})",
     )
     return parser.parse_args(argv)
 
@@ -2205,12 +2253,15 @@ def main(argv=None):
     args = _parse_cli_args(argv)
     smoke_only = bool(args.smoke)
     headless = bool(args.headless)
+    browser = (args.browser or "chrome").strip().lower()
+    _apply_run_overrides(response_timeout=args.timeout, runs_per_object=args.runs)
 
     print("=" * 60)
     print("Dakota Joe Chatbot Testing Script")
     if smoke_only:
         print("Mode: smoke only (Marker=smoke)")
-    print(f"Browser: {'headless' if headless else 'visible'}")
+    print(f"Browser: {browser} ({'headless' if headless else 'visible'})")
+    print(f"Response timeout: {RESPONSE_TIMEOUT}s | Runs per object: {RUNS_PER_OBJECT}")
     print("=" * 60)
 
     if not os.path.exists(PROMPTS_CSV):
@@ -2261,7 +2312,7 @@ def main(argv=None):
 
     print(f"Loaded {len(prompts)} prompts")
 
-    driver = setup_driver(headless=headless)
+    driver = setup_driver(headless=headless, browser=browser)
     allure_enabled = _prepare_allure_results(_browser_label(driver).strip(), "windows")
     benchmarks_by_object = _load_benchmarks_from_results_xlsx() if append_perf else {}
     active_allure_group = None
