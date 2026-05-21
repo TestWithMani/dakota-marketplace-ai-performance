@@ -18,6 +18,21 @@ pipeline {
     }
 
     parameters {
+        choice(
+            name: 'MARKET',
+            choices: ['marketplace', 'sandbox', 'uat', 'custom'],
+            description: 'Target Dakota environment (maps to base URL and optional prompts file)'
+        )
+        string(
+            name: 'CUSTOM_BASE_URL',
+            defaultValue: '',
+            description: 'Required when MARKET=custom. Optional override for sandbox/uat if agent env vars are not set.'
+        )
+        booleanParam(
+            name: 'USE_MARKET_CREDENTIALS',
+            defaultValue: false,
+            description: 'Use Jenkins credential dakota-marketplace-login-<MARKET> instead of dakota-marketplace-login'
+        )
         booleanParam(
             name: 'SMOKE_ONLY',
             defaultValue: true,
@@ -83,8 +98,46 @@ pipeline {
         stage('Initialize') {
             steps {
                 script {
-                    currentBuild.description = "smoke=${params.SMOKE_ONLY} | ${params.BROWSER} | headless=${params.HEADLESS}"
-                    echo "Parameters: SMOKE_ONLY=${params.SMOKE_ONLY}, BROWSER=${params.BROWSER}, HEADLESS=${params.HEADLESS}"
+                    def market = params.MARKET.trim().toLowerCase()
+                    def customUrl = params.CUSTOM_BASE_URL?.trim() ?: ''
+                    def marketplaceUrl = 'https://dakotanetworks.my.site.com/dakotaMarketplace/s/'
+                    def resolvedUrl = ''
+
+                    if (market == 'marketplace') {
+                        resolvedUrl = marketplaceUrl
+                    } else if (market == 'sandbox') {
+                        resolvedUrl = customUrl ?: (env.DAKOTA_SANDBOX_URL ?: '').trim()
+                    } else if (market == 'uat') {
+                        resolvedUrl = customUrl ?: (env.DAKOTA_UAT_URL ?: '').trim()
+                    } else if (market == 'custom') {
+                        resolvedUrl = customUrl ?: (env.DAKOTA_BASE_URL ?: '').trim()
+                        if (!resolvedUrl) {
+                            error("MARKET=custom requires CUSTOM_BASE_URL (or DAKOTA_BASE_URL on the agent).")
+                        }
+                    } else {
+                        error("Unknown MARKET '${params.MARKET}'.")
+                    }
+
+                    if (!resolvedUrl) {
+                        error(
+                            "No base URL for market '${market}'. " +
+                            "Set CUSTOM_BASE_URL on this build or configure DAKOTA_SANDBOX_URL / DAKOTA_UAT_URL on the Jenkins agent."
+                        )
+                    }
+                    if (!resolvedUrl.endsWith('/') && !resolvedUrl.contains('?')) {
+                        resolvedUrl = resolvedUrl + '/'
+                    }
+
+                    env.DAKOTA_MARKET = market
+                    env.DAKOTA_BASE_URL = resolvedUrl
+                    env.DAKOTA_CREDENTIAL_ID = params.USE_MARKET_CREDENTIALS ?
+                        "dakota-marketplace-login-${market}" : 'dakota-marketplace-login'
+
+                    currentBuild.description = "market=${market} | smoke=${params.SMOKE_ONLY} | ${params.BROWSER} | headless=${params.HEADLESS}"
+                    echo "Market: ${market}"
+                    echo "Base URL: ${resolvedUrl}"
+                    echo "Credential ID: ${env.DAKOTA_CREDENTIAL_ID}"
+                    echo "SMOKE_ONLY=${params.SMOKE_ONLY}, BROWSER=${params.BROWSER}, HEADLESS=${params.HEADLESS}"
                     echo "TIMEOUT=${params.RESPONSE_TIMEOUT}, RUNS=${params.RUNS_PER_OBJECT}"
                 }
             }
@@ -121,6 +174,10 @@ pipeline {
                 script {
                     def smokeFlag = params.SMOKE_ONLY ? '--smoke' : ''
                     def headlessFlag = params.HEADLESS ? '--headless' : ''
+                    def baseUrlFlag = ''
+                    if (params.MARKET == 'custom' || params.CUSTOM_BASE_URL?.trim()) {
+                        baseUrlFlag = "--base-url \"${env.DAKOTA_BASE_URL}\""
+                    }
                     def cmd = """
                         @echo off
                         cd /d "%WORKSPACE%"
@@ -128,29 +185,33 @@ pipeline {
                         set PATH=${NODE_PATH};${NPM_PATH};%PATH%
                         if exist allure-results rmdir /s /q allure-results
                         if exist allure-report  rmdir /s /q allure-report
-                        echo Running automation...
-                        "%VENV_PY%" -u chatbot_tester.py ${smokeFlag} ${headlessFlag} --browser ${params.BROWSER} --timeout ${params.RESPONSE_TIMEOUT} --runs ${params.RUNS_PER_OBJECT}
+                        echo Running automation for market ${env.DAKOTA_MARKET}...
+                        "%VENV_PY%" -u chatbot_tester.py --market ${env.DAKOTA_MARKET} ${baseUrlFlag} ${smokeFlag} ${headlessFlag} --browser ${params.BROWSER} --timeout ${params.RESPONSE_TIMEOUT} --runs ${params.RUNS_PER_OBJECT}
                         echo Exit code: %ERRORLEVEL%
                         if errorlevel 1 exit /b %ERRORLEVEL%
                     """
+                    def runEnv = [
+                        "DAKOTA_MARKET=${env.DAKOTA_MARKET}",
+                        "DAKOTA_BASE_URL=${env.DAKOTA_BASE_URL}",
+                        "BROWSER=${params.BROWSER}",
+                    ]
                     if (params.USE_DAKOTA_CREDENTIALS) {
                         withCredentials([
                             usernamePassword(
-                                credentialsId: 'dakota-marketplace-login',
+                                credentialsId: "${env.DAKOTA_CREDENTIAL_ID}",
                                 usernameVariable: 'DAKOTA_USERNAME',
                                 passwordVariable: 'DAKOTA_PASSWORD'
                             )
                         ]) {
-                            withEnv([
+                            withEnv(runEnv + [
                                 "DAKOTA_USERNAME=${DAKOTA_USERNAME}",
                                 "DAKOTA_PASSWORD=${DAKOTA_PASSWORD}",
-                                "BROWSER=${params.BROWSER}"
                             ]) {
                                 bat cmd
                             }
                         }
                     } else {
-                        withEnv(["BROWSER=${params.BROWSER}"]) {
+                        withEnv(runEnv) {
                             bat cmd
                         }
                     }
@@ -245,10 +306,13 @@ print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + 
                     def duration = currentBuild.durationString
                     def dateStr = new Date().format('yyyy-MM-dd')
                     def modeLabel = params.SMOKE_ONLY ? 'Smoke' : 'Full'
+                    def marketLabel = env.DAKOTA_MARKET ?: params.MARKET
 
                     def emailBody = """<!DOCTYPE html><html><body style="font-family:Segoe UI,Arial,sans-serif;">
 <h2>Dakota GPT Performance — ${modeLabel}</h2>
 <p><b>Build:</b> ${env.JOB_NAME} #${env.BUILD_NUMBER}<br/>
+<b>Market:</b> ${marketLabel}<br/>
+<b>Base URL:</b> ${env.DAKOTA_BASE_URL}<br/>
 <b>Browser:</b> ${params.BROWSER} (headless=${params.HEADLESS})<br/>
 <b>Duration:</b> ${duration}</p>
 <table cellpadding="8" style="border-collapse:collapse;">
@@ -264,7 +328,7 @@ print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + 
 
                     emailext(
                         to: "${params.EMAIL_RECIPIENTS}",
-                        subject: "Dakota GPT Performance | ${modeLabel} | ${dateStr}",
+                        subject: "Dakota GPT Performance | ${marketLabel} | ${modeLabel} | ${dateStr}",
                         mimeType: 'text/html',
                         attachmentsPattern: 'Performance evaluation results.xlsx',
                         body: emailBody
@@ -276,7 +340,7 @@ print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + 
 
     post {
         always {
-            echo "Build ${currentBuild.currentResult} — smoke=${params.SMOKE_ONLY}, browser=${params.BROWSER}"
+            echo "Build ${currentBuild.currentResult} — market=${params.MARKET}, smoke=${params.SMOKE_ONLY}, browser=${params.BROWSER}"
         }
         success {
             echo 'Pipeline completed successfully.'

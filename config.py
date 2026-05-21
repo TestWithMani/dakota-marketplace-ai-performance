@@ -44,16 +44,102 @@ def project_path(*parts):
     return os.path.join(BASE_DIR, *parts)
 
 
-# --- Marketplace login ---
-URL = _env_or_default(
-    "DAKOTA_BASE_URL",
-    "https://dakotanetworks.my.site.com/dakotaMarketplace/s/",
-)
+# --- Prompt source (read-only during runs) ---
+PROMPTS_FILE = "Prompts.csv"
+
+# --- Markets (environment / site profiles) ---
+DEFAULT_MARKET = "marketplace"
+
+# Keys: marketplace | sandbox | uat | custom
+# Override URLs via Jenkins/env: DAKOTA_SANDBOX_URL, DAKOTA_UAT_URL, DAKOTA_BASE_URL (custom)
+MARKET_PROFILES = {
+    "marketplace": {
+        "label": "Production Marketplace",
+        "base_url": "https://dakotanetworks.my.site.com/dakotaMarketplace/s/",
+        "prompts_file": "Prompts.csv",
+    },
+    "sandbox": {
+        "label": "Sandbox",
+        "base_url_env": "DAKOTA_SANDBOX_URL",
+        "prompts_file": "Prompts.sandbox.csv",
+    },
+    "uat": {
+        "label": "UAT",
+        "base_url_env": "DAKOTA_UAT_URL",
+        "prompts_file": "Prompts.uat.csv",
+    },
+    "custom": {
+        "label": "Custom",
+        "base_url_env": "DAKOTA_BASE_URL",
+        "prompts_file": "Prompts.csv",
+    },
+}
+
+
+def _normalize_base_url(url):
+    """Ensure marketplace URLs end with / for Salesforce community paths."""
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if url.endswith("/") or "?" in url:
+        return url
+    return url + "/"
+
+
+def resolve_market_profile(market_key=None, base_url_override=None):
+    """Resolve market key to base URL, prompts file, and labels.
+
+    Raises ValueError when the market is unknown or its URL is not configured.
+    """
+    key = (market_key or os.getenv("DAKOTA_MARKET") or DEFAULT_MARKET).strip().lower()
+    if key not in MARKET_PROFILES:
+        known = ", ".join(sorted(MARKET_PROFILES.keys()))
+        raise ValueError(f"Unknown market '{market_key}'. Choose one of: {known}")
+
+    spec = MARKET_PROFILES[key]
+    profile = {
+        "key": key,
+        "label": spec.get("label", key),
+        "prompts_file": spec.get("prompts_file") or PROMPTS_FILE,
+    }
+
+    if base_url_override and str(base_url_override).strip():
+        url = str(base_url_override).strip()
+    elif spec.get("base_url"):
+        url = spec["base_url"]
+    elif spec.get("base_url_env"):
+        url = _env_or_default(spec["base_url_env"], "")
+    else:
+        url = ""
+
+    url = _normalize_base_url(url)
+    if not url:
+        env_hint = spec.get("base_url_env") or "DAKOTA_BASE_URL"
+        raise ValueError(
+            f"Market '{key}' has no base URL configured. "
+            f"Set {env_hint} in Jenkins job parameters, agent environment, or .env."
+        )
+
+    profile["base_url"] = url
+    prompts_path = project_path(profile["prompts_file"])
+    if not os.path.exists(prompts_path) and profile["prompts_file"] != PROMPTS_FILE:
+        profile["prompts_file"] = PROMPTS_FILE
+        prompts_path = project_path(PROMPTS_FILE)
+    profile["prompts_path"] = prompts_path
+    return profile
+
+
+def market_choices():
+    """Sorted market keys for CLI/Jenkins choice lists."""
+    return sorted(MARKET_PROFILES.keys())
+
+
+# --- Marketplace login (default market until apply_market / CLI runs) ---
+_active = resolve_market_profile(DEFAULT_MARKET)
+URL = _active["base_url"]
 USERNAME = _env_or_default("DAKOTA_USERNAME", "aleeta.fatima@dakota.net.marketplace")
 PASSWORD = _env_or_default("DAKOTA_PASSWORD", "Agent2026")
 
-# --- Prompt source (read-only during runs) ---
-PROMPTS_FILE = "Prompts.csv"
 OBJECT_TYPE_COL = "hi"
 PROMPT_COL = "Prompt"
 MARKER_COL = "Marker"

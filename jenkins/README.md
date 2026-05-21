@@ -31,6 +31,9 @@ Script Path: `Jenkinsfile`
 
 | Parameter | Description |
 |-----------|-------------|
+| `MARKET` | `marketplace`, `sandbox`, `uat`, or `custom` |
+| `CUSTOM_BASE_URL` | URL override (required for `custom`; optional for sandbox/uat) |
+| `USE_MARKET_CREDENTIALS` | Use `dakota-marketplace-login-<MARKET>` credential ID |
 | `SMOKE_ONLY` | Smoke prompts only (default: true) |
 | `BROWSER` | chrome / edge / firefox |
 | `HEADLESS` | Headless browser |
@@ -39,6 +42,19 @@ Script Path: `Jenkinsfile`
 | `GENERATE_ALLURE` | Build HTML report |
 | `SEND_EMAIL` | Email summary + Excel |
 | `USE_DAKOTA_CREDENTIALS` | Use `dakota-marketplace-login` |
+
+## Market URLs on the Jenkins agent (optional)
+
+Set global environment variables on the agent or pass `CUSTOM_BASE_URL` per build:
+
+| Market | URL source |
+|--------|------------|
+| `marketplace` | Built-in production URL |
+| `sandbox` | `DAKOTA_SANDBOX_URL` or `CUSTOM_BASE_URL` |
+| `uat` | `DAKOTA_UAT_URL` or `CUSTOM_BASE_URL` |
+| `custom` | `CUSTOM_BASE_URL` (required) |
+
+Optional per-market prompt files: `Prompts.sandbox.csv`, `Prompts.uat.csv` (falls back to `Prompts.csv`).
 
 ## Agent requirements
 

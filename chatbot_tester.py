@@ -38,6 +38,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 
+import config as app_config
 from config import (
     ALLURE_REPORT_DIR as ALLURE_REPORT_DIR_NAME,
     ALLURE_RESULTS_DIR as ALLURE_RESULTS_DIR_NAME,
@@ -48,6 +49,7 @@ from config import (
     CHAT_INPUT_Y_OFFSET,
     CHAT_RECOVERY_SLEEP_SECONDS,
     CONSOLE_EVENT_WAIT_SECONDS,
+    DEFAULT_MARKET,
     MARKER_COL,
     OBJECT_TYPE_COL,
     PAGE_IDLE_AFTER_LOGIN,
@@ -64,7 +66,9 @@ from config import (
     USE_DOM_FIRST_SEND,
     URL,
     USERNAME,
+    market_choices,
     project_path,
+    resolve_market_profile,
 )
 
 _SCRIPT_DIR = project_path()
@@ -651,9 +655,11 @@ def _prepare_allure_results(browser_name, platform_name):
             shutil.rmtree(ALLURE_RESULTS_DIR)
         os.makedirs(ALLURE_RESULTS_DIR, exist_ok=True)
         env_path = os.path.join(ALLURE_RESULTS_DIR, "environment.properties")
+        market_label = os.environ.get("DAKOTA_MARKET", DEFAULT_MARKET)
         with open(env_path, "w", encoding="utf-8") as f:
             f.write(f"Browser={browser_name}\n")
             f.write(f"Platform={platform_name}\n")
+            f.write(f"Market={market_label}\n")
             f.write(f"BaseURL={URL}\n")
             f.write(f"GeneratedAt={datetime.now().isoformat()}\n")
         return True
@@ -2216,6 +2222,18 @@ def _apply_run_overrides(response_timeout=None, runs_per_object=None):
         RUNS_PER_OBJECT = int(runs_per_object)
 
 
+def _apply_market(market_key=None, base_url_override=None):
+    """Apply market profile to runtime URL, prompts path, and config module."""
+    global URL, PROMPTS_CSV
+    profile = resolve_market_profile(market_key, base_url_override)
+    URL = profile["base_url"]
+    app_config.URL = profile["base_url"]
+    PROMPTS_CSV = profile["prompts_path"]
+    os.environ["DAKOTA_MARKET"] = profile["key"]
+    os.environ["DAKOTA_BASE_URL"] = profile["base_url"]
+    return profile
+
+
 def _parse_cli_args(argv=None):
     parser = argparse.ArgumentParser(description="Dakota Joe chatbot prompt automation")
     parser.add_argument(
@@ -2246,6 +2264,17 @@ def _parse_cli_args(argv=None):
         default=None,
         help=f"Timing samples per object (default: {RUNS_PER_OBJECT})",
     )
+    parser.add_argument(
+        "--market",
+        choices=market_choices(),
+        default=os.getenv("DAKOTA_MARKET", DEFAULT_MARKET),
+        help=f"Target market/environment (default: {DEFAULT_MARKET})",
+    )
+    parser.add_argument(
+        "--base-url",
+        default=None,
+        help="Override base URL (required for custom market if DAKOTA_BASE_URL is unset)",
+    )
     return parser.parse_args(argv)
 
 
@@ -2256,10 +2285,19 @@ def main(argv=None):
     browser = (args.browser or "chrome").strip().lower()
     _apply_run_overrides(response_timeout=args.timeout, runs_per_object=args.runs)
 
+    try:
+        market_profile = _apply_market(args.market, args.base_url)
+    except ValueError as exc:
+        print(f"Market configuration error: {exc}")
+        return 1
+
     print("=" * 60)
     print("Dakota Joe Chatbot Testing Script")
     if smoke_only:
         print("Mode: smoke only (Marker=smoke)")
+    print(f"Market: {market_profile['label']} ({market_profile['key']})")
+    print(f"Base URL: {market_profile['base_url']}")
+    print(f"Prompts file: {market_profile['prompts_file']}")
     print(f"Browser: {browser} ({'headless' if headless else 'visible'})")
     print(f"Response timeout: {RESPONSE_TIMEOUT}s | Runs per object: {RUNS_PER_OBJECT}")
     print("=" * 60)

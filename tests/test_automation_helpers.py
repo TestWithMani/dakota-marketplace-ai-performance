@@ -50,5 +50,28 @@ class BenchmarkKeyTests(unittest.TestCase):
         self.assertEqual(ct._normalize_object_key("  Alumni  "), "alumni")
 
 
+class MarketProfileTests(unittest.TestCase):
+    def test_marketplace_profile(self):
+        profile = ct.resolve_market_profile("marketplace")
+        self.assertEqual(profile["key"], "marketplace")
+        self.assertIn("dakotaMarketplace", profile["base_url"])
+
+    def test_custom_profile_requires_url(self):
+        old = os.environ.pop("DAKOTA_BASE_URL", None)
+        try:
+            with self.assertRaises(ValueError):
+                ct.resolve_market_profile("custom")
+        finally:
+            if old is not None:
+                os.environ["DAKOTA_BASE_URL"] = old
+
+    def test_custom_profile_with_override(self):
+        profile = ct.resolve_market_profile(
+            "custom", "https://example.test/community/s/"
+        )
+        self.assertEqual(profile["key"], "custom")
+        self.assertTrue(profile["base_url"].startswith("https://example.test"))
+
+
 if __name__ == "__main__":
     unittest.main()
