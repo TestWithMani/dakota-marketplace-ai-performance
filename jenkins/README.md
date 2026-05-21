@@ -7,7 +7,7 @@ In Jenkins: **Manage Jenkins → Credentials → Global → Add Credentials**
 | Field | Value |
 |-------|--------|
 | Kind | Username with password |
-| ID | `dakota-marketplace-login` |
+| ID | `sf-marketplace-creds` |
 | Username | Dakota marketplace user |
 | Password | Dakota password |
 
@@ -33,7 +33,6 @@ Script Path: `Jenkinsfile`
 |-----------|-------------|
 | `MARKET` | `marketplace`, `sandbox`, `uat`, or `custom` |
 | `CUSTOM_BASE_URL` | URL override (required for `custom`; optional for sandbox/uat) |
-| `USE_MARKET_CREDENTIALS` | Use `dakota-marketplace-login-<MARKET>` credential ID |
 | `SMOKE_ONLY` | Smoke prompts only (default: true) |
 | `BROWSER` | chrome / edge / firefox |
 | `HEADLESS` | Headless browser |
@@ -41,7 +40,7 @@ Script Path: `Jenkinsfile`
 | `RUNS_PER_OBJECT` | Samples per object (default 3) |
 | `GENERATE_ALLURE` | Build HTML report |
 | `SEND_EMAIL` | Email summary + Excel |
-| `USE_DAKOTA_CREDENTIALS` | Use `dakota-marketplace-login` |
+| `USE_DAKOTA_CREDENTIALS` | Use `sf-marketplace-creds` for login |
 
 ## Market URLs on the Jenkins agent (optional)
 

@@ -1,7 +1,7 @@
 // Dakota GPT Performance — parameterized Pipeline (SCM: Jenkinsfile from GitHub)
 //
 // Jenkins job setup (one-time):
-//   1. Create Username/Password credential ID: dakota-marketplace-login (Dakota site user)
+//   1. Jenkins credential ID: sf-marketplace-creds (Dakota / Salesforce marketplace user)
 //   2. Ensure Windows agent has Chrome (+ Edge/Firefox if used), Node, Allure CLI, Python 3.11+
 //   3. Optional: set agent tool paths below or define on the agent as env vars
 //
@@ -27,11 +27,6 @@ pipeline {
             name: 'CUSTOM_BASE_URL',
             defaultValue: '',
             description: 'Required when MARKET=custom. Optional override for sandbox/uat if agent env vars are not set.'
-        )
-        booleanParam(
-            name: 'USE_MARKET_CREDENTIALS',
-            defaultValue: false,
-            description: 'Use Jenkins credential dakota-marketplace-login-<MARKET> instead of dakota-marketplace-login'
         )
         booleanParam(
             name: 'SMOKE_ONLY',
@@ -76,7 +71,7 @@ pipeline {
         booleanParam(
             name: 'USE_DAKOTA_CREDENTIALS',
             defaultValue: true,
-            description: 'Inject DAKOTA_USERNAME/PASSWORD from Jenkins credential dakota-marketplace-login'
+            description: 'Inject DAKOTA_USERNAME/PASSWORD from Jenkins credential sf-marketplace-creds'
         )
         string(
             name: 'GIT_BRANCH',
@@ -91,6 +86,7 @@ pipeline {
         VENV_PY    = "${WORKSPACE}\\venv\\Scripts\\python.exe"
         ALLURE_CMD = "${env.ALLURE_CMD ?: 'allure'}"
         REPO_URL   = 'https://github.com/TestWithMani/dakota_gpt_performance.git'
+        DAKOTA_CREDENTIAL_ID = 'sf-marketplace-creds'
     }
 
     stages {
@@ -130,13 +126,11 @@ pipeline {
 
                     env.DAKOTA_MARKET = market
                     env.DAKOTA_BASE_URL = resolvedUrl
-                    env.DAKOTA_CREDENTIAL_ID = params.USE_MARKET_CREDENTIALS ?
-                        "dakota-marketplace-login-${market}" : 'dakota-marketplace-login'
 
                     currentBuild.description = "market=${market} | smoke=${params.SMOKE_ONLY} | ${params.BROWSER} | headless=${params.HEADLESS}"
                     echo "Market: ${market}"
                     echo "Base URL: ${resolvedUrl}"
-                    echo "Credential ID: ${env.DAKOTA_CREDENTIAL_ID}"
+                    echo "Credential ID: ${DAKOTA_CREDENTIAL_ID}"
                     echo "SMOKE_ONLY=${params.SMOKE_ONLY}, BROWSER=${params.BROWSER}, HEADLESS=${params.HEADLESS}"
                     echo "TIMEOUT=${params.RESPONSE_TIMEOUT}, RUNS=${params.RUNS_PER_OBJECT}"
                 }
@@ -198,7 +192,7 @@ pipeline {
                     if (params.USE_DAKOTA_CREDENTIALS) {
                         withCredentials([
                             usernamePassword(
-                                credentialsId: "${env.DAKOTA_CREDENTIAL_ID}",
+                                credentialsId: "${DAKOTA_CREDENTIAL_ID}",
                                 usernameVariable: 'DAKOTA_USERNAME',
                                 passwordVariable: 'DAKOTA_PASSWORD'
                             )

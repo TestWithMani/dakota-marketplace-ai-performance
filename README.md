@@ -47,7 +47,7 @@ python chatbot_tester.py
 
 Parameterized pipeline: see `Jenkinsfile` and `jenkins/README.md`.
 
-1. Create credential ID **`dakota-marketplace-login`** (Dakota site username/password).
+1. Create credential ID **`sf-marketplace-creds`** (Dakota / Salesforce marketplace username/password).
 2. Create job **`dakota-gpt-performance`** from SCM (`Jenkinsfile` on `main`).
 3. Run with parameters: **SMOKE_ONLY**, **BROWSER**, **HEADLESS**, etc.
 
