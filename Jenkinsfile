@@ -55,7 +55,7 @@ pipeline {
         )
         string(
             name: 'EMAIL_RECIPIENTS',
-            defaultValue: 'wishma.khurram@rolustech.com',
+            defaultValue: 'usman.arshad@rolustech.com',
             description: 'Comma-separated recipient list'
         )
         booleanParam(
