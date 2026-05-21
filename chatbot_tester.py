@@ -845,24 +845,6 @@ def _launch_allure_report_viewer():
     if not os.path.exists(index_path):
         return False
 
-    viewer_script = os.path.join(_SCRIPT_DIR, "open_allure_report.ps1")
-    if os.name == "nt" and os.path.exists(viewer_script):
-        try:
-            subprocess.Popen(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    viewer_script,
-                ],
-                cwd=_SCRIPT_DIR,
-            )
-            return True
-        except Exception:
-            pass
-
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
@@ -926,9 +908,7 @@ def _generate_allure_report(total, passed, failed):
         if _launch_allure_report_viewer():
             print("Allure viewer started. Keep that window open while viewing the report.")
         else:
-            print("View the report from this folder:")
-            print(f"  cd \"{_SCRIPT_DIR}\"")
-            print("  .\\open_allure_report.ps1")
+            print(f"Open: {index_path}")
     except Exception as exc:
         print(f"Allure report generation skipped: {exc}")
 
