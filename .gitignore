@@ -17,6 +17,9 @@ allure-results/
 allure-report/
 report_link_api_responses.log
 
+# Generated performance output (created on each run)
+Performance evaluation results.xlsx
+
 # Excel lock files
 ~$*.xlsx
 

@@ -12,7 +12,7 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Copy credentials into `.env` (see `config.py` for variable names):
+Copy `.env.example` to `.env` and fill in credentials:
 
 ```
 DAKOTA_BASE_URL=
