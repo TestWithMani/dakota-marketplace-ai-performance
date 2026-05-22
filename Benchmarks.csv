@@ -1,0 +1,9 @@
+Object Type,Benchmark (s)
+Accounts,60
+Contacts,60
+Account with Contacts,90
+Accounts with Investments,90
+Alumni,90
+Vintage Year Prompts,90
+Transactions,60
+News,60

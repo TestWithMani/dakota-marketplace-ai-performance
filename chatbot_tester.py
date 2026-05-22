@@ -55,6 +55,7 @@ from config import (
     OBJECT_TYPE_COL,
     PAGE_IDLE_AFTER_LOGIN,
     PASSWORD,
+    BENCHMARKS_CSV as BENCHMARKS_CSV_NAME,
     PERFORMANCE_RESULTS_XLSX as PERFORMANCE_RESULTS_XLSX_NAME,
     PROMPTS_FILE,
     PROMPT_HEADER_NAMES,
@@ -79,16 +80,21 @@ from config import (
 _SCRIPT_DIR = project_path()
 PROMPTS_CSV = project_path(PROMPTS_FILE)
 PERFORMANCE_RESULTS_XLSX = project_path(PERFORMANCE_RESULTS_XLSX_NAME)
+BENCHMARKS_CSV = project_path(BENCHMARKS_CSV_NAME)
 ALLURE_RESULTS_DIR = project_path(ALLURE_RESULTS_DIR_NAME)
 ALLURE_REPORT_DIR = project_path(ALLURE_REPORT_DIR_NAME)
 SCREENSHOTS_DIR = project_path(SCREENSHOTS_DIR_NAME)
+
+# Legacy typo kept for reading older workbooks.
+BENCHMARK_FIELD_LEGACY = "Performnace Benchmake (s)"
+BENCHMARK_FIELD = "Performance Benchmark (s)"
 
 PERF_RESULT_FIELDS = [
     "Prompt",
     "Object Type",
     "Sample #",
     "Time (s)",
-    "Performnace Benchmake (s)",
+    BENCHMARK_FIELD,
     "Browser",
     "Recorded At",
     "Platform",
@@ -485,8 +491,8 @@ def _append_rows_to_performance_results_xlsx(new_rows, merge_prompt_start_end=No
     ws = wb.active
     styles = _xlsx_styles()
 
-    # Benchmarks are configured once as Run summary rows with a value in column E.
-    benchmark_by_obj = _load_benchmarks_from_results_xlsx()
+    benchmark_by_obj = _load_all_benchmarks()
+    bmk_col = _benchmark_col_index(ws)
 
     for r in new_rows:
         ws.append([r.get(k, "") for k in PERF_RESULT_FIELDS])
@@ -505,12 +511,13 @@ def _append_rows_to_performance_results_xlsx(new_rows, merge_prompt_start_end=No
             c.border = styles["border"]
             c.alignment = align_left if col == 1 else align_center
 
-        # For summary rows, apply benchmark and mark avg in red if it exceeds benchmark.
         if is_summary:
             obj_key = _normalize_object_key(r.get("Object Type"))
             bmk = benchmark_by_obj.get(obj_key)
+            if bmk is None:
+                bmk = _benchmark_value_from_row_dict(r)
             if bmk is not None:
-                ws.cell(row=row_idx, column=5).value = bmk
+                ws.cell(row=row_idx, column=bmk_col).value = bmk
                 try:
                     avg = float(ws.cell(row=row_idx, column=4).value)
                     if avg > bmk:
@@ -547,6 +554,65 @@ def _normalize_object_key(value):
     return " ".join(str(value or "").split()).lower()
 
 
+def _benchmark_col_index(ws):
+    """Resolve benchmark column index from header row (supports legacy typo header)."""
+    for col in range(1, ws.max_column + 1):
+        header = str(ws.cell(1, col).value or "").strip().lower()
+        if header in (
+            BENCHMARK_FIELD.lower(),
+            BENCHMARK_FIELD_LEGACY.lower(),
+            "benchmark (s)",
+            "benchmark",
+        ):
+            return col
+    return 5
+
+
+def _benchmark_value_from_row_dict(row_dict):
+    """Parse benchmark seconds from a pending append row dict."""
+    for key in (BENCHMARK_FIELD, BENCHMARK_FIELD_LEGACY):
+        raw = row_dict.get(key)
+        if raw in (None, ""):
+            continue
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _load_benchmarks_from_csv():
+    """Read default benchmark seconds per object type from Benchmarks.csv."""
+    if not os.path.exists(BENCHMARKS_CSV):
+        return {}
+    benchmarks = {}
+    try:
+        with open(BENCHMARKS_CSV, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                obj = (
+                    row.get("Object Type")
+                    or row.get("hi")
+                    or row.get("object type")
+                    or ""
+                ).strip()
+                raw_bmk = (
+                    row.get("Benchmark (s)")
+                    or row.get("Benchmark")
+                    or row.get("benchmark")
+                    or ""
+                ).strip()
+                if not obj or not raw_bmk:
+                    continue
+                try:
+                    benchmarks[_normalize_object_key(obj)] = float(raw_bmk)
+                except ValueError:
+                    continue
+    except Exception:
+        return {}
+    return benchmarks
+
+
 def _load_benchmarks_from_results_xlsx():
     """Read benchmark seconds per object from existing Run summary rows in the XLSX."""
     if openpyxl is None or not os.path.exists(PERFORMANCE_RESULTS_XLSX):
@@ -555,11 +621,12 @@ def _load_benchmarks_from_results_xlsx():
         wb = openpyxl.load_workbook(PERFORMANCE_RESULTS_XLSX, read_only=True, data_only=True)
         ws = wb.active
         benchmarks = {}
+        bmk_col = _benchmark_col_index(ws)
         for rr in range(2, ws.max_row + 1):
             prompt_val = ws.cell(rr, 1).value
             if str(prompt_val or "").strip().lower() != "run summary":
                 continue
-            benchmark_val = ws.cell(rr, 5).value
+            benchmark_val = ws.cell(rr, bmk_col).value
             if benchmark_val in (None, ""):
                 continue
             try:
@@ -567,12 +634,20 @@ def _load_benchmarks_from_results_xlsx():
             except Exception:
                 continue
             obj_key = _normalize_object_key(ws.cell(rr, 2).value)
-            if obj_key and obj_key not in benchmarks:
+            if obj_key:
                 benchmarks[obj_key] = benchmark_s
         wb.close()
         return benchmarks
     except Exception:
         return {}
+
+
+def _load_all_benchmarks():
+    """Merge Benchmarks.csv defaults with per-run overrides stored in the XLSX."""
+    merged = _load_benchmarks_from_csv()
+    for obj_key, seconds in _load_benchmarks_from_results_xlsx().items():
+        merged[obj_key] = seconds
+    return merged
 
 
 def _append_perf_sample_and_maybe_summary(
@@ -586,6 +661,7 @@ def _append_perf_sample_and_maybe_summary(
     elapsed_s,
     group_elapsed,
     recorded,
+    benchmarks_by_object=None,
 ):
     """Append one sample row to the results XLSX; append Run summary when an object group finishes."""
     if not append_perf:
@@ -596,7 +672,7 @@ def _append_perf_sample_and_maybe_summary(
         "Object Type": object_types[i],
         "Sample #": str(sample_nums[i]),
         "Time (s)": str(elapsed_s),
-        "Performnace Benchmake (s)": "",
+        BENCHMARK_FIELD: "",
         "Browser": br,
         "Recorded At": recorded,
         "Platform": "windows",
@@ -617,7 +693,7 @@ def _append_perf_sample_and_maybe_summary(
             pass
         except Exception:
             pass
-    if str(sample_nums[i]) == "3":
+    if str(sample_nums[i]) == str(RUNS_PER_OBJECT):
         try:
             if _ensure_performance_results_xlsx():
                 wb_tmp = openpyxl.load_workbook(PERFORMANCE_RESULTS_XLSX)
@@ -643,12 +719,14 @@ def _append_perf_sample_and_maybe_summary(
     )
     if is_last and ge:
         avg = sum(ge) / len(ge)
+        obj_key = _normalize_object_key(object_types[i])
+        bmk = (benchmarks_by_object or {}).get(obj_key)
         summary_row = {
             "Prompt": "Run summary",
             "Object Type": object_types[i],
             "Sample #": "",
             "Time (s)": f"{avg:.2f}",
-            "Performnace Benchmake (s)": "",
+            BENCHMARK_FIELD: f"{bmk:.2f}" if bmk is not None else "",
             "Browser": br,
             "Recorded At": recorded,
             "Platform": "windows",
@@ -2423,7 +2501,18 @@ def main(argv=None):
 
     driver = setup_driver(headless=headless, browser=browser)
     allure_enabled = _prepare_allure_results(_browser_label(driver).strip(), "windows")
-    benchmarks_by_object = _load_benchmarks_from_results_xlsx() if append_perf else {}
+    benchmarks_by_object = _load_all_benchmarks() if append_perf else {}
+    if append_perf:
+        if benchmarks_by_object:
+            print(
+                f"Benchmarks loaded for {len(benchmarks_by_object)} object type(s) "
+                f"(from {BENCHMARKS_CSV_NAME} and/or Excel Run summary rows)"
+            )
+        else:
+            print(
+                f"WARNING: No benchmarks configured. Add {BENCHMARKS_CSV_NAME} "
+                "or set column E on Excel Run summary rows."
+            )
     active_allure_group = None
     allure_cases_passed = 0
     allure_cases_failed = 0
@@ -2530,6 +2619,7 @@ def main(argv=None):
                     elapsed_s,
                     group_elapsed,
                     recorded,
+                    benchmarks_by_object,
                 )
 
                 if allure_enabled:
@@ -2605,6 +2695,7 @@ def main(argv=None):
                             err_elapsed,
                             group_elapsed,
                             recorded,
+                            benchmarks_by_object,
                         )
                     screenshot_path = take_screenshot(driver, f"failed_{i+1}")
                     failed += 1
@@ -2673,7 +2764,10 @@ def main(argv=None):
             active_allure_group = None
 
     print(f"\n{'='*60}")
-    print(f"RESULTS: Passed={passed}, Failed={failed}")
+    print(
+        f"RESULTS: Prompt passes={passed}, Prompt failures={failed}, "
+        f"Allure object failures={allure_cases_failed}"
+    )
     if csv_writeback_enabled:
         print(f"Updated: {PROMPTS_CSV}")
     else:
@@ -2686,7 +2780,7 @@ def main(argv=None):
         allure_total = allure_cases_passed + allure_cases_failed
         _generate_allure_report(allure_total, allure_cases_passed, allure_cases_failed)
     print("=" * 60)
-    return failed
+    return failed + allure_cases_failed
 
 if __name__ == "__main__":
     exit_code = main(sys.argv[1:]) or 0
