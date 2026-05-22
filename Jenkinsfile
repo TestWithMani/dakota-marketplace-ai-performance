@@ -141,6 +141,8 @@ pipeline {
                     if (market == 'test') {
                         env.DAKOTA_RUN_MODE = 'all'
                         runsForBuild = '1'
+                    } else if (env.DAKOTA_RUN_MODE == 'test') {
+                        runsForBuild = '1'
                     }
                     env.EFFECTIVE_RUNS = runsForBuild
 

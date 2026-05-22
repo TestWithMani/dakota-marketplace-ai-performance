@@ -3,6 +3,8 @@ import os
 import sys
 import unittest
 
+import config as app_config
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
@@ -48,6 +50,13 @@ class PromptCsvTests(unittest.TestCase):
         entries = ct._filter_prompt_entries_for_run_mode(data[5], "all")
         self.assertEqual(len(entries), 1)
         self.assertEqual(ct._prompt_entry_prompt(entries[0]), "Show me ria in usa")
+
+    def test_run_mode_test_on_marketplace_uses_test_csv(self):
+        profile = ct.resolve_market_profile("marketplace")
+        exec_cfg = app_config.resolve_prompt_execution(profile, "test")
+        self.assertEqual(exec_cfg["prompts_file"], "Prompts.test.csv")
+        self.assertEqual(exec_cfg["run_mode"], "all")
+        self.assertEqual(exec_cfg["runs_per_object"], 1)
 
     def test_expand_prompt_runs(self):
         prompts = ["p1", "p2"]

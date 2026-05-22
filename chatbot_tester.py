@@ -72,6 +72,7 @@ from config import (
     market_choices,
     normalize_run_mode,
     project_path,
+    resolve_prompt_execution,
     resolve_market_profile,
 )
 
@@ -2351,15 +2352,23 @@ def main(argv=None):
         print(f"Market configuration error: {exc}")
         return 1
 
-    if market_profile["key"] == "test":
-        run_mode = "all"
+    try:
+        prompt_exec = resolve_prompt_execution(market_profile, run_mode)
+    except ValueError as exc:
+        print(f"Prompt configuration error: {exc}")
+        return 1
+
+    PROMPTS_CSV = prompt_exec["prompts_path"]
+    run_mode = prompt_exec["run_mode"]
+    if prompt_exec.get("runs_per_object") is not None:
+        RUNS_PER_OBJECT = int(prompt_exec["runs_per_object"])
 
     print("=" * 60)
     print("Dakota Joe Chatbot Testing Script")
     print(f"Run mode: {run_mode}")
     print(f"Market: {market_profile['label']} ({market_profile['key']})")
     print(f"Base URL: {market_profile['base_url']}")
-    print(f"Prompts file: {market_profile['prompts_file']}")
+    print(f"Prompts file: {prompt_exec['prompts_file']}")
     print(f"Browser: {browser} ({'headless' if headless else 'visible'})")
     print(f"Response timeout: {RESPONSE_TIMEOUT}s | Runs per object: {RUNS_PER_OBJECT}")
     print("=" * 60)

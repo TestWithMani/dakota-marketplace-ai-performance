@@ -46,6 +46,7 @@ def project_path(*parts):
 
 # --- Prompt source (read-only during runs) ---
 PROMPTS_FILE = "Prompts.csv"
+TEST_PROMPTS_FILE = "Prompts.test.csv"
 
 # --- Markets (environment / site profiles) ---
 DEFAULT_MARKET = "marketplace"
@@ -152,6 +153,39 @@ def normalize_run_mode(value):
     if mode in ("full", "regression", "complete"):
         return "all"
     return DEFAULT_RUN_MODE
+
+
+def resolve_prompt_execution(market_profile, run_mode):
+    """Choose prompts file and effective filter for a market + run mode.
+
+    RUN_MODE/Marker ``test`` uses ``Prompts.test.csv`` (single RIA case) on any
+    market except the dedicated ``test`` market profile (which already points there).
+    """
+    mode = normalize_run_mode(run_mode)
+    prompts_path = market_profile["prompts_path"]
+    prompts_file = market_profile["prompts_file"]
+    effective_mode = mode
+    runs_per_object = market_profile.get("runs_per_object")
+
+    if market_profile["key"] == "test":
+        effective_mode = "all"
+    elif mode == "test":
+        test_path = project_path(TEST_PROMPTS_FILE)
+        if not os.path.exists(test_path):
+            raise ValueError(
+                f"Run mode 'test' requires {TEST_PROMPTS_FILE} in the project root."
+            )
+        prompts_path = test_path
+        prompts_file = TEST_PROMPTS_FILE
+        effective_mode = "all"
+        runs_per_object = 1
+
+    return {
+        "prompts_path": prompts_path,
+        "prompts_file": prompts_file,
+        "run_mode": effective_mode,
+        "runs_per_object": runs_per_object,
+    }
 
 
 def market_choices():

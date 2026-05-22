@@ -25,7 +25,7 @@ Run modes (`--run-mode`):
 | Mode | What runs |
 |------|-----------|
 | `smoke` | Rows with `Marker=smoke` in the active prompts file (default) |
-| `test` | Rows with `Marker=test` |
+| `test` | Single RIA case from `Prompts.test.csv` (any market URL) |
 | `all` | Every prompt in the active prompts file |
 
 ```bash
