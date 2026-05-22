@@ -67,3 +67,10 @@ Optional per-market prompt files: `Prompts.sandbox.csv`, `Prompts.uat.csv` (fall
 - Email Extension plugin
 
 If Allure generation fails, the build is marked **UNSTABLE** but email and Excel archive still run.
+
+**Automation does not require Node.js** — only the Allure stage does. If Node is not installed yet, either:
+
+- Uncheck **GENERATE_ALLURE** to run tests + email without HTML report, or  
+- Install **Node.js LTS** on the Jenkins agent to `C:\Program Files\nodejs` and re-run.
+
+Optional Jenkins global environment variables: `NODE_PATH`, `NPM_PATH`.

@@ -86,10 +86,7 @@ pipeline {
     }
 
     environment {
-        NODE_PATH  = "${env.NODE_PATH ?: 'C:\\Program Files\\nodejs'}"
-        NPM_PATH   = "${env.NPM_PATH ?: 'C:\\Users\\wishma.khurram\\AppData\\Roaming\\npm'}"
         VENV_PY    = "${WORKSPACE}\\venv\\Scripts\\python.exe"
-        ALLURE_CMD = "${env.ALLURE_CMD ?: 'allure'}"
         REPO_URL   = 'https://github.com/TestWithMani/dakota_gpt_performance.git'
         DAKOTA_CREDENTIAL_ID = 'sf-marketplace-creds'
     }
@@ -138,6 +135,34 @@ pipeline {
                     echo "Credential ID: ${DAKOTA_CREDENTIAL_ID}"
                     echo "SMOKE_ONLY=${params.SMOKE_ONLY}, BROWSER=${params.BROWSER}, HEADLESS=${params.HEADLESS}"
                     echo "TIMEOUT=${params.RESPONSE_TIMEOUT}, RUNS=${params.RUNS_PER_OBJECT}"
+
+                    // Resolve Node/npm paths on the Windows agent (for Allure only).
+                    if (params.GENERATE_ALLURE) {
+                        def nodeCandidates = [
+                            env.NODE_PATH,
+                            'C:\\Program Files\\nodejs',
+                            'C:\\Program Files (x86)\\nodejs',
+                        ].findAll { it?.trim() }
+                        for (dir in nodeCandidates) {
+                            if (fileExists("${dir}\\node.exe")) {
+                                env.NODE_PATH = dir
+                                break
+                            }
+                        }
+                        def npmCandidates = [
+                            env.NPM_PATH,
+                            "${env.USERPROFILE}\\AppData\\Roaming\\npm",
+                            'C:\\Users\\Administrator\\AppData\\Roaming\\npm',
+                        ].findAll { it?.trim() }
+                        for (dir in npmCandidates) {
+                            if (fileExists(dir)) {
+                                env.NPM_PATH = dir
+                                break
+                            }
+                        }
+                        echo "Resolved NODE_PATH=${env.NODE_PATH ?: '(not found)'}"
+                        echo "Resolved NPM_PATH=${env.NPM_PATH ?: '(not found)'}"
+                    }
                 }
             }
         }
@@ -168,44 +193,6 @@ pipeline {
             }
         }
 
-        stage('Setup Node and Allure') {
-            steps {
-                bat """
-                    @echo off
-                    cd /d "%WORKSPACE%"
-                    set "PATH=${NODE_PATH};${NPM_PATH};%PATH%"
-                    if exist "${NODE_PATH}\\node.exe" set "PATH=${NODE_PATH};%PATH%"
-                    if exist "%APPDATA%\\npm" set "PATH=%APPDATA%\\npm;%PATH%"
-                    echo === Node.js ===
-                    where node >nul 2>&1
-                    if errorlevel 1 (
-                        echo ERROR: Node.js not found. Install Node.js on this Jenkins agent or set NODE_PATH.
-                        exit /b 1
-                    )
-                    node --version
-                    echo === Java (required by Allure CLI) ===
-                    where java >nul 2>&1
-                    if errorlevel 1 (
-                        echo ERROR: Java not found. Install JDK 8+ on this Jenkins agent and add java to PATH.
-                        exit /b 1
-                    )
-                    java -version
-                    echo === Allure CLI ===
-                    where allure >nul 2>&1
-                    if errorlevel 1 (
-                        echo Installing allure-commandline via npm...
-                        call npm install -g allure-commandline
-                    )
-                    where allure >nul 2>&1
-                    if errorlevel 1 (
-                        echo ERROR: Allure CLI not available after npm install.
-                        exit /b 1
-                    )
-                    allure --version
-                """
-            }
-        }
-
         stage('Run Dakota Automation') {
             steps {
                 script {
@@ -219,7 +206,6 @@ pipeline {
                         @echo off
                         cd /d "%WORKSPACE%"
                         call venv\\Scripts\\activate.bat
-                        set PATH=${NODE_PATH};${NPM_PATH};%PATH%
                         if exist allure-results rmdir /s /q allure-results
                         if exist allure-report  rmdir /s /q allure-report
                         echo Running automation for market ${env.DAKOTA_MARKET}...
@@ -262,27 +248,56 @@ pipeline {
             }
             steps {
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    bat """
-                        @echo off
-                        cd /d "%WORKSPACE%"
-                        set "PATH=${NODE_PATH};${NPM_PATH};%PATH%"
-                        if exist "${NODE_PATH}\\node.exe" set "PATH=${NODE_PATH};%PATH%"
-                        if exist "%APPDATA%\\npm" set "PATH=%APPDATA%\\npm;%PATH%"
-                        if not exist allure-results (
-                            echo ERROR: allure-results folder missing.
-                            exit /b 1
-                        )
-                        node --version
-                        java -version
-                        allure generate allure-results --clean -o allure-report
-                        if errorlevel 1 exit /b 1
-                        if not exist allure-report\\index.html (
-                            echo ERROR: allure-report\\index.html was not created.
-                            exit /b 1
-                        )
-                        echo Allure report ready.
-                        dir allure-report
-                    """
+                    script {
+                        def nodePath = env.NODE_PATH ?: 'C:\\Program Files\\nodejs'
+                        def npmPath = env.NPM_PATH ?: "${env.USERPROFILE}\\AppData\\Roaming\\npm"
+                        bat """
+                            @echo off
+                            cd /d "%WORKSPACE%"
+                            set "PATH=${nodePath};${npmPath};C:\\Program Files\\nodejs;C:\\Program Files (x86)\\nodejs;%APPDATA%\\npm;%PATH%"
+                            if exist "${nodePath}\\node.exe" set "PATH=${nodePath};%PATH%"
+                            if exist "${npmPath}" set "PATH=${npmPath};%PATH%"
+                            if not exist allure-results (
+                                echo ERROR: allure-results folder missing.
+                                exit /b 1
+                            )
+                            echo === Node.js ===
+                            where node >nul 2>&1
+                            if errorlevel 1 (
+                                echo ERROR: Node.js not found. Install from https://nodejs.org/ on this agent
+                                echo or set NODE_PATH in Jenkins global environment / job environment.
+                                exit /b 1
+                            )
+                            node --version
+                            echo === Java (required by Allure CLI) ===
+                            where java >nul 2>&1
+                            if errorlevel 1 (
+                                echo ERROR: Java not found. Install JDK 8+ and add java to PATH.
+                                exit /b 1
+                            )
+                            java -version
+                            echo === Allure CLI ===
+                            where allure >nul 2>&1
+                            if errorlevel 1 (
+                                echo Installing allure-commandline via npm...
+                                call npm install -g allure-commandline
+                            )
+                            where allure >nul 2>&1
+                            if errorlevel 1 (
+                                echo ERROR: Allure CLI not available after npm install.
+                                exit /b 1
+                            )
+                            allure --version
+                            allure generate allure-results --clean -o allure-report
+                            if errorlevel 1 exit /b 1
+                            if not exist allure-report\\index.html (
+                                echo ERROR: allure-report\\index.html was not created.
+                                exit /b 1
+                            )
+                            echo Allure report ready.
+                            dir allure-report
+                        """
+                    }
                 }
             }
         }
