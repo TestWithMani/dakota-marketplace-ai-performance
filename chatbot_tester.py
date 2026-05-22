@@ -2358,6 +2358,7 @@ def main(argv=None):
         print(f"Prompt configuration error: {exc}")
         return 1
 
+    global PROMPTS_CSV, RUNS_PER_OBJECT
     PROMPTS_CSV = prompt_exec["prompts_path"]
     run_mode = prompt_exec["run_mode"]
     if prompt_exec.get("runs_per_object") is not None:
