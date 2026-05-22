@@ -347,7 +347,7 @@ print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + 
                     def allureUrl = fileExists('allure-report/index.html') ?
                         "${env.BUILD_URL}artifact/allure-report/index.html" :
                         "${env.BUILD_URL} (Allure report was not generated — see console log)"
-                    def dateStr = new Date().format('yyyy-MM-dd')
+                    def dateStr = new Date().format('MMMM d, yyyy', java.util.Locale.ENGLISH)
                     def marketLabel = env.DAKOTA_MARKET ?: params.MARKET
                     def modeLabel = (env.DAKOTA_RUN_MODE ?: params.RUN_MODE).capitalize()
 
@@ -443,7 +443,7 @@ print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + 
                         echo "Email To: ${emailTo}"
                         emailext(
                             to: "${emailTo}",
-                            subject: "Dakota Marketplace Performance | ${marketLabel} | ${modeLabel} | ${dateStr}",
+                            subject: "Dakota Marketplace Performance | ${dateStr}",
                             mimeType: 'text/html',
                             attachmentsPattern: 'Performance evaluation results.xlsx',
                             body: body
