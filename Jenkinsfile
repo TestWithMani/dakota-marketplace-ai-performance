@@ -625,7 +625,7 @@ def sendEmailNotification(
         }.join('')
         : '<span style="color:#065f46;font-weight:600;">No failed tests or tab timeouts were detected in this run.</span>'
 
-    def subject = "Dakota Marketplace Performance | ${dateStr}"
+    def subject = "Dakota GPT Performance | ${dateStr}"
 
     def body = """
 <!DOCTYPE html>
@@ -641,7 +641,7 @@ def sendEmailNotification(
         <table width="760" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #dbe3ee;box-shadow:0 14px 32px rgba(30,64,175,0.14);">
           <tr>
             <td style="padding:26px 30px;background:linear-gradient(135deg,#0f172a 0%,#1e40af 52%,#7c3aed 100%);color:#ffffff;">
-              <h2 style="margin:0;font-size:30px;letter-spacing:0.2px;">Dakota Marketplace Performance</h2>
+              <h2 style="margin:0;font-size:30px;letter-spacing:0.2px;">Dakota GPT JOE BOT Performance</h2>
             </td>
           </tr>
 
