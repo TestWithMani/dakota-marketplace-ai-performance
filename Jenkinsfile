@@ -240,8 +240,26 @@ pipeline {
                 script {
                     def cfg = getEffectiveRunConfig()
                     if (cfg.generateAllure) {
-                        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                            generateAllureReport(cfg.market as String, cfg.baseUrl as String, cfg.browser as String)
+                        ensureAllureEnvironmentProperties(cfg.market as String, cfg.baseUrl as String, cfg.browser as String)
+                        if (fileExists('allure-results')) {
+                            try {
+                                allure([
+                                    includeProperties: false,
+                                    jdk: '',
+                                    properties: [],
+                                    reportBuildPolicy: 'ALWAYS',
+                                    results: [[path: 'allure-results']],
+                                    reportName: 'Allure Report',
+                                ])
+                                echo "Allure plugin report: ${env.BUILD_URL}allure/"
+                            } catch (MissingMethodException ex) {
+                                echo 'Allure Jenkins plugin not installed; generating standalone HTML report.'
+                                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                                    generateAllureReport(cfg.market as String, cfg.baseUrl as String, cfg.browser as String)
+                                }
+                            }
+                        } else {
+                            echo 'Skipping Allure publish: allure-results directory not found.'
                         }
                     }
                     if (fileExists('allure-report/index.html')) {
@@ -264,9 +282,7 @@ pipeline {
                     sendEmailNotification(
                         currentBuild.currentResult ?: 'UNKNOWN',
                         cfg.emailRecipients as String,
-                        cfg.additionalEmailRecipients as String,
-                        cfg.market as String,
-                        cfg.runMode as String
+                        cfg.additionalEmailRecipients as String
                     )
                 }
                 echo "Build ${currentBuild.currentResult} — market=${cfg.market}, mode=${cfg.runMode}, browser=${cfg.browser}"
@@ -500,18 +516,24 @@ Skipped: ${stats.skipped}
 """.stripIndent()
 }
 
+def ensureAllureEnvironmentProperties(String market, String baseUrl, String browser) {
+    bat """
+        @echo off
+        cd /d "%WORKSPACE%"
+        if not exist allure-results mkdir allure-results
+        echo Browser=${browser}> allure-results\\environment.properties
+        echo Platform=windows>> allure-results\\environment.properties
+        echo Market=${market}>> allure-results\\environment.properties
+        echo BaseURL=${baseUrl}>> allure-results\\environment.properties
+    """
+}
+
 def generateAllureReport(String market, String baseUrl, String browser) {
+    ensureAllureEnvironmentProperties(market, baseUrl, browser)
     bat """
         @echo off
         cd /d "%WORKSPACE%"
         if not exist tools mkdir tools
-        if not exist allure-results mkdir allure-results
-        if not exist allure-results\\environment.properties (
-            echo Browser=${browser}> allure-results\\environment.properties
-            echo Platform=windows>> allure-results\\environment.properties
-            echo Market=${market}>> allure-results\\environment.properties
-            echo BaseURL=${baseUrl}>> allure-results\\environment.properties
-        )
         echo === Java (required for Allure) ===
         where java >nul 2>&1
         if errorlevel 1 (
@@ -566,9 +588,7 @@ def collectRecipientEmails(String defaultEmail, String additionalEmails) {
 def sendEmailNotification(
     String buildStatus,
     String defaultEmail,
-    String additionalEmails,
-    String market,
-    String runMode
+    String additionalEmails
 ) {
     def stats = getTestStatistics()
     def failedTests = getFailedTestNames()
@@ -591,15 +611,13 @@ def sendEmailNotification(
     }
 
     def jobUrl = env.BUILD_URL ?: ''
+    def buildUrlBase = jobUrl.endsWith('/') ? jobUrl : "${jobUrl}/"
     def excelPath = env.EXCEL_ARTIFACT ?: 'Performance evaluation results.xlsx'
     def excelExists = fileExists(excelPath)
-    def allureUrl = fileExists('allure-report/index.html') ?
-        "${jobUrl}artifact/allure-report/index.html" :
-        "${jobUrl} (Allure report was not generated — see console log)"
+    def allureUrl = "${buildUrlBase}allure/"
     def durationString = (currentBuild.durationString ?: 'N/A').replace(' and counting', '')
     def passRate = stats.total > 0 ? ((stats.passed * 100) / stats.total) as int : 0
     def dateStr = formatEmailSubjectDate()
-    def modeLabel = (runMode ?: 'smoke').capitalize()
 
     def failedTestSummary = failedTests
         ? failedTests.collect { item ->
@@ -624,7 +642,6 @@ def sendEmailNotification(
           <tr>
             <td style="padding:26px 30px;background:linear-gradient(135deg,#0f172a 0%,#1e40af 52%,#7c3aed 100%);color:#ffffff;">
               <h2 style="margin:0;font-size:30px;letter-spacing:0.2px;">Dakota Marketplace Performance</h2>
-              <p style="margin:8px 0 0;font-size:13px;opacity:0.9;">Market: ${market} · Run mode: ${modeLabel}</p>
             </td>
           </tr>
 
