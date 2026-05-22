@@ -38,8 +38,7 @@ python chatbot_tester.py --market test
 
 ## Outputs
 
-- `Performance evaluation results.xlsx` — timing samples and run summaries (benchmark column filled from `Benchmarks.csv`)
-- `Benchmarks.csv` — max allowed seconds per object type (`hi` / Object Type column)
+- `Performance evaluation results.xlsx` — timing samples, run summaries, and benchmarks (column E on Run summary rows)
 - `allure-results/` / `allure-report/` — Allure HTML report
 - `screenshots/` — failures only
 

@@ -228,7 +228,6 @@ ENABLE_COORDINATE_FALLBACK = True
 # --- Output locations (relative to BASE_DIR) ---
 SCREENSHOTS_DIR = "screenshots"
 PERFORMANCE_RESULTS_XLSX = "Performance evaluation results.xlsx"
-BENCHMARKS_CSV = "Benchmarks.csv"
 ALLURE_RESULTS_DIR = "allure-results"
 ALLURE_REPORT_DIR = "allure-report"
 
