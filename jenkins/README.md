@@ -33,6 +33,7 @@ Script Path: `Jenkinsfile`
 |-----------|-------------|
 | `MARKET` | `marketplace`, `test`, `sandbox`, `uat`, `custom` |
 | `RUN_MODE` | `smoke`, `test`, or `all` — `test` loads `Prompts.test.csv` (1 RIA prompt, 1 run) on any market |
+| `FRESH_REPORT_OUTPUT` | Clear Excel / Allure artifacts before the run |
 | `CUSTOM_BASE_URL` | URL override (required for `custom`; optional for sandbox/uat/test) |
 | `BROWSER` | chrome / edge / firefox |
 | `HEADLESS` | Headless browser |

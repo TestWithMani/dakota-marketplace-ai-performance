@@ -1,21 +1,20 @@
 // Dakota GPT Performance — parameterized Pipeline (SCM: Jenkinsfile from GitHub)
 //
 // Jenkins job setup (one-time):
-//   1. Jenkins credential ID: sf-marketplace-creds (Dakota / Salesforce marketplace user)
-//   2. Ensure Windows agent has Chrome (+ Edge/Firefox if used), JDK 8+, Python 3.11+
-//      (Allure CLI is downloaded automatically; Node.js is not required)
-//   3. Optional: set agent tool paths below or define on the agent as env vars
+//   1. Credential ID: sf-marketplace-creds (Dakota / Salesforce marketplace user)
+//   2. Windows agent: Chrome, JDK 8+, Python 3.11+ (Allure CLI downloaded automatically)
+//   3. Email Extension plugin for HTML report emails
 //
-// Do NOT store Jenkins or Dakota passwords in this file.
+// Do NOT store passwords in this file.
 
 pipeline {
     agent any
 
     options {
-        buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '10'))
-        timeout(time: 180, unit: 'MINUTES')
         timestamps()
         disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '30'))
+        timeout(time: 180, unit: 'MINUTES')
     }
 
     parameters {
@@ -27,12 +26,12 @@ pipeline {
         choice(
             name: 'RUN_MODE',
             choices: ['smoke', 'test', 'all'],
-            description: 'Prompts to run: smoke (Marker=smoke), test (Marker=test), all (full CSV). Ignored when MARKET=test (uses Prompts.test.csv).'
+            description: 'Prompts: smoke (Marker=smoke), test (Prompts.test.csv / 1 run), all (full CSV)'
         )
         string(
             name: 'CUSTOM_BASE_URL',
             defaultValue: '',
-            description: 'Required when MARKET=custom. Optional override for sandbox/uat/test if agent env vars are not set.'
+            description: 'Required when MARKET=custom. Optional override for sandbox/uat/test.'
         )
         choice(
             name: 'BROWSER',
@@ -52,17 +51,22 @@ pipeline {
         string(
             name: 'RUNS_PER_OBJECT',
             defaultValue: '3',
-            description: 'Performance timing samples per object type'
+            description: 'Performance timing samples per object (forced to 1 for MARKET=test or RUN_MODE=test)'
+        )
+        booleanParam(
+            name: 'FRESH_REPORT_OUTPUT',
+            defaultValue: false,
+            description: 'Clear previous Excel / Allure artifacts before this run'
         )
         booleanParam(
             name: 'GENERATE_ALLURE',
             defaultValue: true,
-            description: 'Generate HTML Allure report after the run'
+            description: 'Generate and archive HTML Allure report after the run'
         )
         booleanParam(
             name: 'SEND_EMAIL',
             defaultValue: true,
-            description: 'Send summary email with Excel attachment'
+            description: 'Send HTML email summary after pipeline completion'
         )
         string(
             name: 'EMAIL_RECIPIENTS',
@@ -72,7 +76,7 @@ pipeline {
         string(
             name: 'ADDITIONAL_EMAIL_RECIPIENTS',
             defaultValue: '',
-            description: 'Extra comma-separated recipients added to To (merged with EMAIL_RECIPIENTS)'
+            description: 'Extra comma-separated recipients (merged with EMAIL_RECIPIENTS)'
         )
         booleanParam(
             name: 'USE_DAKOTA_CREDENTIALS',
@@ -87,13 +91,14 @@ pipeline {
     }
 
     environment {
-        VENV_PY         = "${WORKSPACE}\\venv\\Scripts\\python.exe"
-        REPO_URL        = 'https://github.com/TestWithMani/dakota_gpt_performance.git'
+        VENV_PY              = "${WORKSPACE}\\venv\\Scripts\\python.exe"
+        REPO_URL             = 'https://github.com/TestWithMani/dakota_gpt_performance.git'
         DAKOTA_CREDENTIAL_ID = 'sf-marketplace-creds'
-        ALLURE_VERSION  = '2.32.0'
-        ALLURE_HOME     = "${WORKSPACE}\\tools\\allure-${ALLURE_VERSION}"
-        ALLURE_ZIP      = "${WORKSPACE}\\tools\\allure-${ALLURE_VERSION}.zip"
-        ALLURE_DOWNLOAD = "https://github.com/allure-framework/allure2/releases/download/${ALLURE_VERSION}/allure-${ALLURE_VERSION}.zip"
+        ALLURE_VERSION       = '2.32.0'
+        ALLURE_HOME          = "${WORKSPACE}\\tools\\allure-${ALLURE_VERSION}"
+        ALLURE_ZIP           = "${WORKSPACE}\\tools\\allure-${ALLURE_VERSION}.zip"
+        ALLURE_DOWNLOAD      = "https://github.com/allure-framework/allure2/releases/download/${ALLURE_VERSION}/allure-${ALLURE_VERSION}.zip"
+        EXCEL_ARTIFACT       = 'Performance evaluation results.xlsx'
     }
 
     stages {
@@ -101,58 +106,27 @@ pipeline {
         stage('Initialize') {
             steps {
                 script {
-                    def market = params.MARKET.trim().toLowerCase()
-                    def customUrl = params.CUSTOM_BASE_URL?.trim() ?: ''
-                    def marketplaceUrl = 'https://dakotanetworks.my.site.com/dakotaMarketplace/s/'
-                    def resolvedUrl = ''
+                    def cfg = getEffectiveRunConfig()
+                    validateRuntimeParameters(
+                        cfg.market as String,
+                        cfg.runMode as String,
+                        cfg.browser as String,
+                        cfg.responseTimeout as String,
+                        cfg.runsPerObject as String
+                    )
+                    env.DAKOTA_MARKET = cfg.market
+                    env.DAKOTA_BASE_URL = cfg.baseUrl
+                    env.DAKOTA_RUN_MODE = cfg.runMode
+                    env.EFFECTIVE_RUNS = cfg.runsPerObject
 
-                    if (market == 'marketplace') {
-                        resolvedUrl = marketplaceUrl
-                    } else if (market == 'test') {
-                        resolvedUrl = customUrl ?: (env.DAKOTA_TEST_URL ?: '').trim() ?: marketplaceUrl
-                    } else if (market == 'sandbox') {
-                        resolvedUrl = customUrl ?: (env.DAKOTA_SANDBOX_URL ?: '').trim()
-                    } else if (market == 'uat') {
-                        resolvedUrl = customUrl ?: (env.DAKOTA_UAT_URL ?: '').trim()
-                    } else if (market == 'custom') {
-                        resolvedUrl = customUrl ?: (env.DAKOTA_BASE_URL ?: '').trim()
-                        if (!resolvedUrl) {
-                            error("MARKET=custom requires CUSTOM_BASE_URL (or DAKOTA_BASE_URL on the agent).")
-                        }
-                    } else {
-                        error("Unknown MARKET '${params.MARKET}'.")
-                    }
-
-                    if (!resolvedUrl) {
-                        error(
-                            "No base URL for market '${market}'. " +
-                            "Set CUSTOM_BASE_URL on this build or configure DAKOTA_SANDBOX_URL / DAKOTA_UAT_URL on the Jenkins agent."
-                        )
-                    }
-                    if (!resolvedUrl.endsWith('/') && !resolvedUrl.contains('?')) {
-                        resolvedUrl = resolvedUrl + '/'
-                    }
-
-                    env.DAKOTA_MARKET = market
-                    env.DAKOTA_BASE_URL = resolvedUrl
-
-                    env.DAKOTA_RUN_MODE = params.RUN_MODE.trim().toLowerCase()
-                    def runsForBuild = params.RUNS_PER_OBJECT
-                    if (market == 'test') {
-                        env.DAKOTA_RUN_MODE = 'all'
-                        runsForBuild = '1'
-                    } else if (env.DAKOTA_RUN_MODE == 'test') {
-                        runsForBuild = '1'
-                    }
-                    env.EFFECTIVE_RUNS = runsForBuild
-
-                    currentBuild.description = "market=${market} | mode=${env.DAKOTA_RUN_MODE} | ${params.BROWSER} | headless=${params.HEADLESS}"
-                    echo "Market: ${market}"
-                    echo "Run mode: ${env.DAKOTA_RUN_MODE}"
-                    echo "Base URL: ${resolvedUrl}"
+                    currentBuild.description = "market=${cfg.market} | mode=${cfg.runMode} | ${cfg.browser} | headless=${cfg.headless}"
+                    echo "Market: ${cfg.market}"
+                    echo "Run mode: ${cfg.runMode}"
+                    echo "Base URL: ${cfg.baseUrl}"
                     echo "Credential ID: ${DAKOTA_CREDENTIAL_ID}"
-                    echo "BROWSER=${params.BROWSER}, HEADLESS=${params.HEADLESS}"
-                    echo "TIMEOUT=${params.RESPONSE_TIMEOUT}, RUNS=${env.EFFECTIVE_RUNS}"
+                    echo "BROWSER=${cfg.browser}, HEADLESS=${cfg.headless}"
+                    echo "TIMEOUT=${cfg.responseTimeout}, RUNS=${cfg.runsPerObject}"
+                    echo "FRESH_REPORT_OUTPUT=${cfg.freshReportOutput}, GENERATE_ALLURE=${cfg.generateAllure}"
                 }
             }
         }
@@ -173,7 +147,7 @@ pipeline {
                 bat '''
                     @echo off
                     cd /d "%WORKSPACE%"
-                    python -m venv venv
+                    if not exist venv python -m venv venv
                     call venv\\Scripts\\activate.bat
                     python -m pip install --upgrade pip
                     pip install -r requirements.txt
@@ -183,54 +157,99 @@ pipeline {
             }
         }
 
+        stage('Prepare Report Directories') {
+            steps {
+                script {
+                    def cfg = getEffectiveRunConfig()
+                    if (cfg.freshReportOutput) {
+                        echo 'Fresh report mode: clearing previous Excel and Allure artifacts.'
+                        bat '''
+                            @echo off
+                            cd /d "%WORKSPACE%"
+                            if exist "%EXCEL_ARTIFACT%" del /q "%EXCEL_ARTIFACT%"
+                            if exist allure-results rmdir /s /q allure-results
+                            if exist allure-report rmdir /s /q allure-report
+                        '''
+                    } else {
+                        bat '''
+                            @echo off
+                            cd /d "%WORKSPACE%"
+                            if not exist allure-results mkdir allure-results
+                        '''
+                    }
+                }
+            }
+        }
+
         stage('Run Dakota Automation') {
             steps {
-                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                 script {
-                    def headlessFlag = params.HEADLESS ? '--headless' : ''
+                    def cfg = getEffectiveRunConfig()
+                    def headlessFlag = cfg.headless ? '--headless' : ''
                     def baseUrlFlag = ''
-                    if (params.MARKET == 'custom' || params.CUSTOM_BASE_URL?.trim()) {
-                        baseUrlFlag = "--base-url \"${env.DAKOTA_BASE_URL}\""
+                    if (cfg.market == 'custom' || params.CUSTOM_BASE_URL?.trim()) {
+                        baseUrlFlag = "--base-url \"${cfg.baseUrl}\""
                     }
-                    def effectiveRuns = env.EFFECTIVE_RUNS ?: params.RUNS_PER_OBJECT
+
                     def cmd = """
                         @echo off
                         cd /d "%WORKSPACE%"
                         call venv\\Scripts\\activate.bat
-                        if exist allure-results rmdir /s /q allure-results
-                        if exist allure-report  rmdir /s /q allure-report
-                        echo Running automation: market=${env.DAKOTA_MARKET} run-mode=${env.DAKOTA_RUN_MODE}...
-                        "%VENV_PY%" -u chatbot_tester.py --market ${env.DAKOTA_MARKET} --run-mode ${env.DAKOTA_RUN_MODE} ${baseUrlFlag} ${headlessFlag} --browser ${params.BROWSER} --timeout ${params.RESPONSE_TIMEOUT} --runs ${effectiveRuns}
+                        if not exist allure-results mkdir allure-results
+                        echo Running automation: market=${cfg.market} run-mode=${cfg.runMode}...
+                        "%VENV_PY%" -u chatbot_tester.py --market ${cfg.market} --run-mode ${cfg.runMode} ${baseUrlFlag} ${headlessFlag} --browser ${cfg.browser} --timeout ${cfg.responseTimeout} --runs ${cfg.runsPerObject}
                         echo Exit code: %ERRORLEVEL%
                         if errorlevel 1 exit /b %ERRORLEVEL%
                     """
+
                     def runEnv = [
-                        "DAKOTA_MARKET=${env.DAKOTA_MARKET}",
-                        "DAKOTA_BASE_URL=${env.DAKOTA_BASE_URL}",
-                        "DAKOTA_RUN_MODE=${env.DAKOTA_RUN_MODE}",
-                        "BROWSER=${params.BROWSER}",
+                        "DAKOTA_MARKET=${cfg.market}",
+                        "DAKOTA_BASE_URL=${cfg.baseUrl}",
+                        "DAKOTA_RUN_MODE=${cfg.runMode}",
+                        "BROWSER=${cfg.browser}",
                     ]
-                    if (params.USE_DAKOTA_CREDENTIALS) {
-                        withCredentials([
-                            usernamePassword(
-                                credentialsId: "${DAKOTA_CREDENTIAL_ID}",
-                                usernameVariable: 'DAKOTA_USERNAME',
-                                passwordVariable: 'DAKOTA_PASSWORD'
-                            )
-                        ]) {
-                            withEnv(runEnv + [
-                                "DAKOTA_USERNAME=${DAKOTA_USERNAME}",
-                                "DAKOTA_PASSWORD=${DAKOTA_PASSWORD}",
+
+                    catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                        if (cfg.useCredentials) {
+                            withCredentials([
+                                usernamePassword(
+                                    credentialsId: "${DAKOTA_CREDENTIAL_ID}",
+                                    usernameVariable: 'DAKOTA_USERNAME',
+                                    passwordVariable: 'DAKOTA_PASSWORD'
+                                )
                             ]) {
+                                withEnv(runEnv + [
+                                    'DAKOTA_USERNAME=' + DAKOTA_USERNAME,
+                                    'DAKOTA_PASSWORD=' + DAKOTA_PASSWORD,
+                                ]) {
+                                    bat cmd
+                                }
+                            }
+                        } else {
+                            withEnv(runEnv) {
                                 bat cmd
                             }
                         }
-                    } else {
-                        withEnv(runEnv) {
-                            bat cmd
-                        }
                     }
                 }
+            }
+        }
+
+        stage('Publish Reports') {
+            steps {
+                script {
+                    def cfg = getEffectiveRunConfig()
+                    if (cfg.generateAllure) {
+                        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                            generateAllureReport(cfg.market as String, cfg.baseUrl as String, cfg.browser as String)
+                        }
+                    }
+                    if (fileExists('allure-report/index.html')) {
+                        archiveArtifacts artifacts: 'allure-report/**', fingerprint: true, allowEmptyArchive: true
+                    }
+                    if (fileExists(env.EXCEL_ARTIFACT)) {
+                        archiveArtifacts artifacts: "${env.EXCEL_ARTIFACT}", fingerprint: true, allowEmptyArchive: true
+                    }
                 }
             }
         }
@@ -239,121 +258,331 @@ pipeline {
     post {
         always {
             script {
-                echo "Post-build: result=${currentBuild.currentResult}, market=${params.MARKET}"
-
-                // --- Allure: always attempt (success or failure); uses Java + standalone CLI zip (no Node.js) ---
-                if (params.GENERATE_ALLURE) {
-                    catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                        bat """
-                            @echo off
-                            cd /d "%WORKSPACE%"
-                            if not exist tools mkdir tools
-                            if not exist allure-results mkdir allure-results
-                            if not exist allure-results\\environment.properties (
-                                echo Browser=${params.BROWSER}> allure-results\\environment.properties
-                                echo Platform=windows>> allure-results\\environment.properties
-                                echo Market=${env.DAKOTA_MARKET ?: params.MARKET}>> allure-results\\environment.properties
-                                echo BaseURL=${env.DAKOTA_BASE_URL ?: ''}>> allure-results\\environment.properties
-                            )
-                            echo === Java (required for Allure) ===
-                            where java >nul 2>&1
-                            if errorlevel 1 (
-                                echo ERROR: Java not found. Install JDK 8+ on this Jenkins agent.
-                                exit /b 1
-                            )
-                            java -version
-                            if not exist "${ALLURE_HOME}\\bin\\allure.bat" (
-                                echo Downloading Allure ${ALLURE_VERSION}...
-                                powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '${ALLURE_DOWNLOAD}' -OutFile '${ALLURE_ZIP}'"
-                                if errorlevel 1 exit /b 1
-                                powershell -NoProfile -Command "Expand-Archive -Path '${ALLURE_ZIP}' -DestinationPath '${WORKSPACE}\\tools' -Force"
-                                if errorlevel 1 exit /b 1
-                            )
-                            if not exist "${ALLURE_HOME}\\bin\\allure.bat" (
-                                echo ERROR: Allure CLI not found after extract.
-                                exit /b 1
-                            )
-                            echo === Generating Allure report ===
-                            call "${ALLURE_HOME}\\bin\\allure.bat" generate allure-results --clean -o allure-report
-                            if errorlevel 1 exit /b 1
-                            if not exist allure-report\\index.html (
-                                echo ERROR: allure-report\\index.html missing.
-                                exit /b 1
-                            )
-                            echo Allure report ready: allure-report\\index.html
-                        """
-                    }
+                def cfg = getEffectiveRunConfig()
+                logTestSummaryToConsole('Post pipeline summary')
+                if (cfg.sendEmail) {
+                    sendEmailNotification(
+                        currentBuild.currentResult ?: 'UNKNOWN',
+                        cfg.emailRecipients as String,
+                        cfg.additionalEmailRecipients as String,
+                        cfg.market as String,
+                        cfg.runMode as String
+                    )
                 }
+                echo "Build ${currentBuild.currentResult} — market=${cfg.market}, mode=${cfg.runMode}, browser=${cfg.browser}"
+            }
+        }
+        success {
+            echo 'Pipeline finished (automation passed).'
+        }
+        failure {
+            echo 'Pipeline finished with failures — reports/email were still attempted where configured.'
+        }
+    }
+}
 
-                // --- Archive artifacts ---
-                if (fileExists('allure-report/index.html')) {
-                    archiveArtifacts artifacts: 'allure-report/**', fingerprint: true, allowEmptyArchive: true
-                } else {
-                    echo 'Allure HTML report was not produced; skipping Allure archive.'
-                }
-                if (fileExists('Performance evaluation results.xlsx')) {
-                    archiveArtifacts artifacts: 'Performance evaluation results.xlsx', fingerprint: true, allowEmptyArchive: true
-                }
+// ---------------------------------------------------------------------------
+// Shared helpers (same style as salesforce_tab_performance Jenkinsfile)
+// ---------------------------------------------------------------------------
 
-                // --- Email (exact HTML template) ---
-                if (params.SEND_EMAIL) {
-                    def pyScript = """
+def getEffectiveRunConfig() {
+    def market = (params.MARKET ?: 'marketplace').trim().toLowerCase()
+    def runMode = (params.RUN_MODE ?: 'smoke').trim().toLowerCase()
+    def runsPerObject = (params.RUNS_PER_OBJECT ?: '3').trim()
+
+    if (market == 'test') {
+        runMode = 'all'
+        runsPerObject = '1'
+    } else if (runMode == 'test') {
+        runsPerObject = '1'
+    }
+
+    return [
+        market                   : market,
+        runMode                  : runMode,
+        baseUrl                  : resolveMarketUrl(market, params.CUSTOM_BASE_URL?.trim() ?: ''),
+        browser                  : (params.BROWSER ?: 'chrome').trim().toLowerCase(),
+        headless                 : params.HEADLESS as boolean,
+        responseTimeout          : (params.RESPONSE_TIMEOUT ?: '100').trim(),
+        runsPerObject            : runsPerObject,
+        freshReportOutput        : params.FRESH_REPORT_OUTPUT as boolean,
+        generateAllure           : params.GENERATE_ALLURE as boolean,
+        sendEmail                : params.SEND_EMAIL as boolean,
+        emailRecipients          : (params.EMAIL_RECIPIENTS ?: '').trim(),
+        additionalEmailRecipients: (params.ADDITIONAL_EMAIL_RECIPIENTS ?: '').trim(),
+        useCredentials           : params.USE_DAKOTA_CREDENTIALS as boolean,
+    ]
+}
+
+def resolveMarketUrl(String market, String customUrl) {
+    def marketplaceUrl = 'https://dakotanetworks.my.site.com/dakotaMarketplace/s/'
+    def resolvedUrl = ''
+
+    if (market == 'marketplace') {
+        resolvedUrl = marketplaceUrl
+    } else if (market == 'test') {
+        resolvedUrl = customUrl ?: (env.DAKOTA_TEST_URL ?: '').trim() ?: marketplaceUrl
+    } else if (market == 'sandbox') {
+        resolvedUrl = customUrl ?: (env.DAKOTA_SANDBOX_URL ?: '').trim()
+    } else if (market == 'uat') {
+        resolvedUrl = customUrl ?: (env.DAKOTA_UAT_URL ?: '').trim()
+    } else if (market == 'custom') {
+        resolvedUrl = customUrl ?: (env.DAKOTA_BASE_URL ?: '').trim()
+        if (!resolvedUrl) {
+            error("MARKET=custom requires CUSTOM_BASE_URL (or DAKOTA_BASE_URL on the agent).")
+        }
+    } else {
+        error("Unknown MARKET '${market}'.")
+    }
+
+    if (!resolvedUrl) {
+        error(
+            "No base URL for market '${market}'. " +
+            "Set CUSTOM_BASE_URL on this build or configure DAKOTA_SANDBOX_URL / DAKOTA_UAT_URL on the agent."
+        )
+    }
+    if (!resolvedUrl.endsWith('/') && !resolvedUrl.contains('?')) {
+        resolvedUrl = resolvedUrl + '/'
+    }
+    return resolvedUrl
+}
+
+def validateRuntimeParameters(
+    String market,
+    String runMode,
+    String browser,
+    String responseTimeout,
+    String runsPerObject
+) {
+    if (!(market in ['marketplace', 'test', 'sandbox', 'uat', 'custom'])) {
+        error("Invalid MARKET='${market}'.")
+    }
+    if (!(runMode in ['smoke', 'test', 'all'])) {
+        error("Invalid RUN_MODE='${runMode}'. Allowed: smoke, test, all.")
+    }
+    if (!(browser in ['chrome', 'edge', 'firefox'])) {
+        error("BROWSER must be chrome, edge, or firefox. Got '${browser}'.")
+    }
+    if (!(responseTimeout ==~ /^\d+$/)) {
+        error("RESPONSE_TIMEOUT must be a non-negative integer, got '${responseTimeout}'.")
+    }
+    if (!(runsPerObject ==~ /^\d+$/)) {
+        error("RUNS_PER_OBJECT must be a non-negative integer, got '${runsPerObject}'.")
+    }
+    if ((runsPerObject as int) < 1) {
+        error("RUNS_PER_OBJECT must be >= 1, got '${runsPerObject}'.")
+    }
+}
+
+def formatEmailSubjectDate() {
+    // Sandbox-safe (java.util.Date has no Groovy format(Locale) in Jenkins CPS).
+    def sdf = new java.text.SimpleDateFormat('MMMM d, yyyy', java.util.Locale.ENGLISH)
+    return sdf.format(new Date())
+}
+
+def getTestStatistics() {
+    def stats = [total: 0, passed: 0, failed: 0, skipped: 0]
+    def resultsDir = "${env.WORKSPACE}\\allure-results"
+    if (!fileExists('allure-results')) {
+        echo 'allure-results not found; email stats will be zero.'
+        return stats
+    }
+
+    try {
+        def pyScript = """
 import os, json
 results_dir = r'${env.WORKSPACE}\\\\allure-results'
 total = passed = failed = skipped = 0
-failed_names = []
 if os.path.exists(results_dir):
     for f in os.listdir(results_dir):
         if f.endswith('-result.json'):
             with open(os.path.join(results_dir, f), encoding='utf-8') as fh:
                 data = json.load(fh)
                 status = data.get('status', '').lower()
-                name = data.get('name', 'Unknown')
                 total += 1
                 if status == 'passed':
                     passed += 1
                 elif status == 'failed':
                     failed += 1
-                    failed_names.append(name)
                 elif status == 'skipped':
                     skipped += 1
-failed_names_str = '|'.join(failed_names) if failed_names else ''
-print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + ',' + failed_names_str)
+print(','.join([str(total), str(passed), str(failed), str(skipped)]))
 """
-                    writeFile file: 'parse_results.py', text: pyScript
-                    def parseOut = bat(
-                        script: "@\"${VENV_PY}\" parse_results.py",
-                        returnStdout: true
-                    ).trim()
-                    def lastLine = parseOut.readLines().last().trim()
+        writeFile file: 'parse_allure_stats.py', text: pyScript
+        def parseOut = bat(
+            script: "@\"${env.VENV_PY}\" parse_allure_stats.py",
+            returnStdout: true
+        ).trim()
+        def lastLine = parseOut.readLines().last().trim()
+        def parts = lastLine.split(',')
+        if (parts.size() >= 4) {
+            stats.total = (parts[0] ?: '0') as int
+            stats.passed = (parts[1] ?: '0') as int
+            stats.failed = (parts[2] ?: '0') as int
+            stats.skipped = (parts[3] ?: '0') as int
+        }
+    } catch (Exception ex) {
+        echo "Could not parse Allure stats: ${ex.message}"
+    }
+    return stats
+}
 
-                    def total = 0, passed = 0, failed = 0, skipped = 0, failedNames = ''
-                    def p1 = lastLine.indexOf(',')
-                    def p2 = lastLine.indexOf(',', p1 + 1)
-                    def p3 = lastLine.indexOf(',', p2 + 1)
-                    def p4 = lastLine.indexOf(',', p3 + 1)
-                    if (p4 > 0) {
-                        total = lastLine.substring(0, p1).toInteger()
-                        passed = lastLine.substring(p1 + 1, p2).toInteger()
-                        failed = lastLine.substring(p2 + 1, p3).toInteger()
-                        skipped = lastLine.substring(p3 + 1, p4).toInteger()
-                        failedNames = lastLine.substring(p4 + 1).replace('|', ', ')
-                    }
+def getFailedTestNames() {
+    def failures = []
+    if (!fileExists('allure-results')) {
+        return failures
+    }
+    try {
+        def pyScript = """
+import os, json
+results_dir = r'${env.WORKSPACE}\\\\allure-results'
+names = []
+if os.path.exists(results_dir):
+    for f in os.listdir(results_dir):
+        if f.endswith('-result.json'):
+            with open(os.path.join(results_dir, f), encoding='utf-8') as fh:
+                data = json.load(fh)
+                if data.get('status', '').lower() == 'failed':
+                    names.append(data.get('name', 'Unknown'))
+print('|'.join(names))
+"""
+        writeFile file: 'parse_allure_failures.py', text: pyScript
+        def parseOut = bat(
+            script: "@\"${env.VENV_PY}\" parse_allure_failures.py",
+            returnStdout: true
+        ).trim()
+        def lastLine = parseOut.readLines().last().trim()
+        if (lastLine) {
+            failures = lastLine.tokenize('|').findAll { it?.trim() }.unique()
+        }
+    } catch (Exception ex) {
+        echo "Could not parse failed test names: ${ex.message}"
+    }
+    return failures
+}
 
-                    def stats = [total: total, passed: passed, failed: failed, skipped: skipped]
-                    def passRate = total > 0 ? (int)((passed * 100) / total) : 0
-                    def durationString = currentBuild.durationString ?: '-'
-                    def failedTestSummary = failed > 0 ?
-                        "${failed} test(s) failed: ${failedNames}" :
-                        'No failed tests or tab timeouts were detected in this run.'
-                    def allureUrl = fileExists('allure-report/index.html') ?
-                        "${env.BUILD_URL}artifact/allure-report/index.html" :
-                        "${env.BUILD_URL} (Allure report was not generated — see console log)"
-                    def dateStr = new Date().format('MMMM d, yyyy', java.util.Locale.ENGLISH)
-                    def marketLabel = env.DAKOTA_MARKET ?: params.MARKET
-                    def modeLabel = (env.DAKOTA_RUN_MODE ?: params.RUN_MODE).capitalize()
+def logTestSummaryToConsole(String label = 'Test summary') {
+    def stats = getTestStatistics()
+    echo """
+================ ${label} ================
+Total  : ${stats.total}
+Passed : ${stats.passed}
+Failed : ${stats.failed}
+Skipped: ${stats.skipped}
+==========================================
+""".stripIndent()
+}
 
-                    def body = """
+def generateAllureReport(String market, String baseUrl, String browser) {
+    bat """
+        @echo off
+        cd /d "%WORKSPACE%"
+        if not exist tools mkdir tools
+        if not exist allure-results mkdir allure-results
+        if not exist allure-results\\environment.properties (
+            echo Browser=${browser}> allure-results\\environment.properties
+            echo Platform=windows>> allure-results\\environment.properties
+            echo Market=${market}>> allure-results\\environment.properties
+            echo BaseURL=${baseUrl}>> allure-results\\environment.properties
+        )
+        echo === Java (required for Allure) ===
+        where java >nul 2>&1
+        if errorlevel 1 (
+            echo ERROR: Java not found. Install JDK 8+ on this Jenkins agent.
+            exit /b 1
+        )
+        java -version
+        if not exist "${ALLURE_HOME}\\bin\\allure.bat" (
+            echo Downloading Allure ${ALLURE_VERSION}...
+            powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '${ALLURE_DOWNLOAD}' -OutFile '${ALLURE_ZIP}'"
+            if errorlevel 1 exit /b 1
+            powershell -NoProfile -Command "Expand-Archive -Path '${ALLURE_ZIP}' -DestinationPath '${WORKSPACE}\\tools' -Force"
+            if errorlevel 1 exit /b 1
+        )
+        if not exist "${ALLURE_HOME}\\bin\\allure.bat" (
+            echo ERROR: Allure CLI not found after extract.
+            exit /b 1
+        )
+        echo === Generating Allure report ===
+        call "${ALLURE_HOME}\\bin\\allure.bat" generate allure-results --clean -o allure-report
+        if errorlevel 1 exit /b 1
+        if not exist allure-report\\index.html (
+            echo ERROR: allure-report\\index.html missing.
+            exit /b 1
+        )
+        echo Allure report ready: allure-report\\index.html
+    """
+}
+
+def collectRecipientEmails(String defaultEmail, String additionalEmails) {
+    def recipients = []
+    def seen = [] as Set
+
+    [defaultEmail, additionalEmails].findAll { it?.trim() }.each { source ->
+        source
+            .split(/[,\s;]+/)
+            .collect { it.trim() }
+            .findAll { it }
+            .each { mail ->
+                def normalized = mail.toLowerCase()
+                if (!seen.contains(normalized)) {
+                    seen.add(normalized)
+                    recipients.add(mail)
+                }
+            }
+    }
+
+    echo "Email recipients resolved: ${recipients.join(', ')}"
+    return recipients
+}
+
+def sendEmailNotification(
+    String buildStatus,
+    String defaultEmail,
+    String additionalEmails,
+    String market,
+    String runMode
+) {
+    def stats = getTestStatistics()
+    def failedTests = getFailedTestNames()
+    def actualStatus = currentBuild.result ?: buildStatus
+
+    if (!(actualStatus in ['FAILURE', 'ABORTED'])) {
+        if (stats.total == 0) {
+            actualStatus = 'UNSTABLE'
+        } else if (stats.failed > 0) {
+            actualStatus = 'FAILURE'
+        } else {
+            actualStatus = 'SUCCESS'
+        }
+    }
+
+    def recipients = collectRecipientEmails(defaultEmail, additionalEmails)
+    if (recipients.isEmpty()) {
+        echo 'No email recipients configured; skipping email notification.'
+        return
+    }
+
+    def jobUrl = env.BUILD_URL ?: ''
+    def excelPath = env.EXCEL_ARTIFACT ?: 'Performance evaluation results.xlsx'
+    def excelExists = fileExists(excelPath)
+    def allureUrl = fileExists('allure-report/index.html') ?
+        "${jobUrl}artifact/allure-report/index.html" :
+        "${jobUrl} (Allure report was not generated — see console log)"
+    def durationString = (currentBuild.durationString ?: 'N/A').replace(' and counting', '')
+    def passRate = stats.total > 0 ? ((stats.passed * 100) / stats.total) as int : 0
+    def dateStr = formatEmailSubjectDate()
+    def modeLabel = (runMode ?: 'smoke').capitalize()
+
+    def failedTestSummary = failedTests
+        ? failedTests.collect { item ->
+            "<div style=\"margin:0 0 6px;padding:7px 10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;color:#9a3412;\">${item}</div>"
+        }.join('')
+        : '<span style="color:#065f46;font-weight:600;">No failed tests or tab timeouts were detected in this run.</span>'
+
+    def subject = "Dakota Marketplace Performance | ${dateStr}"
+
+    def body = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -368,6 +597,7 @@ print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + 
           <tr>
             <td style="padding:26px 30px;background:linear-gradient(135deg,#0f172a 0%,#1e40af 52%,#7c3aed 100%);color:#ffffff;">
               <h2 style="margin:0;font-size:30px;letter-spacing:0.2px;">Dakota Marketplace Performance</h2>
+              <p style="margin:8px 0 0;font-size:13px;opacity:0.9;">Market: ${market} · Run mode: ${modeLabel}</p>
             </td>
           </tr>
 
@@ -392,7 +622,7 @@ print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + 
                   <td style="padding:10px 12px;border-bottom:1px solid #dbe3f3;color:#0f766e;font-weight:700;">${passRate}%</td>
                 </tr>
                 <tr>
-                  <td style="padding:10px 12px;background:linear-gradient(180deg,#dbeafe 0%,#bfdbfe 100%);"><strong>Failed Tests / Affected Tabs</strong></td>
+                  <td style="padding:10px 12px;background:linear-gradient(180deg,#dbeafe 0%,#bfdbfe 100%);"><strong>Failed Tests / Prompts</strong></td>
                   <td style="padding:10px 12px;line-height:1.45;">${failedTestSummary}</td>
                 </tr>
               </table>
@@ -416,7 +646,7 @@ print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + 
 
           <tr>
             <td style="padding:13px 30px;background:#0f172a;color:#cbd5e1;font-size:12px;">
-              Jenkins CI/CD • Dakota Marketplace Test Framework
+              Jenkins CI/CD • Dakota GPT Performance Framework
             </td>
           </tr>
         </table>
@@ -427,39 +657,30 @@ print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + 
 </html>
 """
 
-                    def emailToList = []
-                    [params.EMAIL_RECIPIENTS, params.ADDITIONAL_EMAIL_RECIPIENTS].each { raw ->
-                        if (raw?.trim()) {
-                            raw.split(',').each { addr ->
-                                def trimmed = addr.trim()
-                                if (trimmed && !emailToList.contains(trimmed)) {
-                                    emailToList << trimmed
-                                }
-                            }
-                        }
-                    }
-                    def emailTo = emailToList.join(', ')
-                    if (!emailTo) {
-                        echo 'WARNING: No email recipients configured; skipping email.'
-                    } else {
-                        echo "Email To: ${emailTo}"
-                        emailext(
-                            to: "${emailTo}",
-                            subject: "Dakota Marketplace Performance | ${dateStr}",
-                            mimeType: 'text/html',
-                            attachmentsPattern: 'Performance evaluation results.xlsx',
-                            body: body
-                        )
-                    }
-                }
+    def baseArgs = [
+        subject         : subject,
+        body            : body,
+        mimeType        : 'text/html',
+        attachLog       : false,
+        compressLog     : false,
+        attachmentsPattern: excelExists ? excelPath : '',
+    ]
+
+    def recipientList = recipients.join(', ')
+    echo "Sending email to: ${recipientList}"
+
+    try {
+        emailext(baseArgs + [to: recipientList])
+    } catch (Exception ex) {
+        echo "Combined email send failed: ${ex.message}"
+        echo 'Falling back to one-by-one recipient delivery.'
+        recipients.each { recipient ->
+            try {
+                echo "Sending fallback email to: ${recipient}"
+                emailext(baseArgs + [to: recipient])
+            } catch (Exception innerEx) {
+                echo "Failed to send email to ${recipient}: ${innerEx.message}"
             }
-            echo "Build ${currentBuild.currentResult} — market=${params.MARKET}, mode=${params.RUN_MODE}, browser=${params.BROWSER}"
-        }
-        success {
-            echo 'Pipeline finished (tests passed).'
-        }
-        failure {
-            echo 'Pipeline finished with failures — Allure/email still attempted in post build.'
         }
     }
 }
