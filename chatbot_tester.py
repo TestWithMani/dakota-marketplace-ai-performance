@@ -55,6 +55,8 @@ from config import (
     OBJECT_TYPE_COL,
     PAGE_IDLE_AFTER_LOGIN,
     PASSWORD,
+    BENCHMARKS_CSV as BENCHMARKS_CSV_NAME,
+    DEFAULT_OBJECT_BENCHMARKS,
     PERFORMANCE_RESULTS_XLSX as PERFORMANCE_RESULTS_XLSX_NAME,
     PROMPTS_FILE,
     PROMPT_HEADER_NAMES,
@@ -79,6 +81,7 @@ from config import (
 _SCRIPT_DIR = project_path()
 PROMPTS_CSV = project_path(PROMPTS_FILE)
 PERFORMANCE_RESULTS_XLSX = project_path(PERFORMANCE_RESULTS_XLSX_NAME)
+BENCHMARKS_CSV = project_path(BENCHMARKS_CSV_NAME)
 ALLURE_RESULTS_DIR = project_path(ALLURE_RESULTS_DIR_NAME)
 ALLURE_REPORT_DIR = project_path(ALLURE_REPORT_DIR_NAME)
 SCREENSHOTS_DIR = project_path(SCREENSHOTS_DIR_NAME)
@@ -488,8 +491,7 @@ def _append_rows_to_performance_results_xlsx(new_rows, merge_prompt_start_end=No
     ws = wb.active
     styles = _xlsx_styles()
 
-    # Benchmarks: existing Run summary rows in column E (original project behavior).
-    benchmark_by_obj = _load_benchmarks_from_results_xlsx()
+    benchmark_by_obj = _load_benchmarks_for_run()
     bmk_col = _benchmark_col_index(ws)
 
     for r in new_rows:
@@ -575,6 +577,47 @@ def _benchmark_value_from_row_dict(row_dict):
         return float(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _load_benchmarks_from_csv():
+    """Read default benchmark seconds from Benchmarks.csv (repo defaults)."""
+    if os.path.exists(BENCHMARKS_CSV):
+        benchmarks = {}
+        try:
+            with open(BENCHMARKS_CSV, "r", encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    obj = (
+                        row.get("Object Type")
+                        or row.get("hi")
+                        or row.get("object type")
+                        or ""
+                    ).strip()
+                    raw_bmk = (
+                        row.get("Benchmark (s)")
+                        or row.get("Benchmark")
+                        or row.get("benchmark")
+                        or ""
+                    ).strip()
+                    if not obj or not raw_bmk:
+                        continue
+                    try:
+                        benchmarks[_normalize_object_key(obj)] = float(raw_bmk)
+                    except ValueError:
+                        continue
+            if benchmarks:
+                return benchmarks
+        except Exception:
+            pass
+    return dict(DEFAULT_OBJECT_BENCHMARKS)
+
+
+def _load_benchmarks_for_run():
+    """Benchmarks for this run: defaults (CSV/config), overridden by Excel Run summary column E."""
+    merged = _load_benchmarks_from_csv()
+    for obj_key, seconds in _load_benchmarks_from_results_xlsx().items():
+        merged[obj_key] = seconds
+    return merged
 
 
 def _load_benchmarks_from_results_xlsx():
@@ -2457,18 +2500,13 @@ def main(argv=None):
 
     driver = setup_driver(headless=headless, browser=browser)
     allure_enabled = _prepare_allure_results(_browser_label(driver).strip(), "windows")
-    benchmarks_by_object = _load_benchmarks_from_results_xlsx() if append_perf else {}
-    if append_perf:
-        if benchmarks_by_object:
-            print(
-                f"Benchmarks loaded for {len(benchmarks_by_object)} object type(s) "
-                f"from {PERFORMANCE_RESULTS_XLSX_NAME} Run summary column E"
-            )
-        else:
-            print(
-                f"WARNING: No benchmarks in {PERFORMANCE_RESULTS_XLSX_NAME}. "
-                "Set Performnace Benchmake (s) on Run summary rows (column E), then re-run."
-            )
+    benchmarks_by_object = _load_benchmarks_for_run() if append_perf else {}
+    if append_perf and benchmarks_by_object:
+        excel_count = len(_load_benchmarks_from_results_xlsx())
+        print(
+            f"Benchmarks ready for {len(benchmarks_by_object)} object type(s) "
+            f"({excel_count} from Excel column E, remainder from {BENCHMARKS_CSV_NAME})"
+        )
     active_allure_group = None
     allure_cases_passed = 0
     allure_cases_failed = 0
@@ -2597,7 +2635,7 @@ def main(argv=None):
                     )
                     if _allure_group_is_complete(i, prompts, object_types, append_perf):
                         if append_perf:
-                            benchmarks_by_object = _load_benchmarks_from_results_xlsx()
+                            benchmarks_by_object = _load_benchmarks_for_run()
                         object_passed = _finalize_allure_object_group(
                             active_allure_group, benchmarks_by_object
                         )
@@ -2678,7 +2716,7 @@ def main(argv=None):
                     )
                     if _allure_group_is_complete(i, prompts, object_types, append_perf):
                         if append_perf:
-                            benchmarks_by_object = _load_benchmarks_from_results_xlsx()
+                            benchmarks_by_object = _load_benchmarks_for_run()
                         object_passed = _finalize_allure_object_group(
                             active_allure_group, benchmarks_by_object
                         )
@@ -2715,7 +2753,7 @@ def main(argv=None):
             pass
         if allure_enabled and active_allure_group is not None:
             if append_perf:
-                benchmarks_by_object = _load_benchmarks_from_results_xlsx()
+                benchmarks_by_object = _load_benchmarks_for_run()
             object_passed = _finalize_allure_object_group(
                 active_allure_group, benchmarks_by_object
             )

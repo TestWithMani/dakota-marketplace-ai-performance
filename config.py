@@ -228,6 +228,19 @@ ENABLE_COORDINATE_FALLBACK = True
 # --- Output locations (relative to BASE_DIR) ---
 SCREENSHOTS_DIR = "screenshots"
 PERFORMANCE_RESULTS_XLSX = "Performance evaluation results.xlsx"
+BENCHMARKS_CSV = "Benchmarks.csv"
+
+# Default seconds per object when Excel column E is empty (also written to Benchmarks.csv).
+DEFAULT_OBJECT_BENCHMARKS = {
+    "accounts": 60.0,
+    "contacts": 60.0,
+    "account with contacts": 90.0,
+    "accounts with investments": 90.0,
+    "alumni": 90.0,
+    "vintage year prompts": 90.0,
+    "transactions": 60.0,
+    "news": 60.0,
+}
 ALLURE_RESULTS_DIR = "allure-results"
 ALLURE_REPORT_DIR = "allure-report"
 

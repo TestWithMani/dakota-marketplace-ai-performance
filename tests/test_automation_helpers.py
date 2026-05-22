@@ -74,6 +74,11 @@ class BenchmarkKeyTests(unittest.TestCase):
     def test_normalize_object_key(self):
         self.assertEqual(ct._normalize_object_key("  Alumni  "), "alumni")
 
+    def test_load_benchmarks_for_run_always_has_defaults(self):
+        merged = ct._load_benchmarks_for_run()
+        self.assertIn("accounts", merged)
+        self.assertGreater(merged["accounts"], 0)
+
 
 class MarketProfileTests(unittest.TestCase):
     def test_test_market_profile(self):
