@@ -50,13 +50,20 @@ PROMPTS_FILE = "Prompts.csv"
 # --- Markets (environment / site profiles) ---
 DEFAULT_MARKET = "marketplace"
 
-# Keys: marketplace | sandbox | uat | custom
-# Override URLs via Jenkins/env: DAKOTA_SANDBOX_URL, DAKOTA_UAT_URL, DAKOTA_BASE_URL (custom)
+# Keys: marketplace | test | sandbox | uat | custom
+# Override URLs via Jenkins/env: DAKOTA_TEST_URL, DAKOTA_SANDBOX_URL, DAKOTA_UAT_URL, DAKOTA_BASE_URL
 MARKET_PROFILES = {
     "marketplace": {
         "label": "Production Marketplace",
         "base_url": "https://dakotanetworks.my.site.com/dakotaMarketplace/s/",
         "prompts_file": "Prompts.csv",
+    },
+    "test": {
+        "label": "Test (RIA account only)",
+        "base_url": "https://dakotanetworks.my.site.com/dakotaMarketplace/s/",
+        "base_url_env": "DAKOTA_TEST_URL",
+        "prompts_file": "Prompts.test.csv",
+        "runs_per_object": 1,
     },
     "sandbox": {
         "label": "Sandbox",
@@ -74,6 +81,12 @@ MARKET_PROFILES = {
         "prompts_file": "Prompts.csv",
     },
 }
+
+# Prompt row markers (Prompts.csv Marker column) and run selection modes.
+SMOKE_MARKER = "smoke"
+TEST_MARKER = "test"
+RUN_MODES = ("all", "smoke", "test")
+DEFAULT_RUN_MODE = "smoke"
 
 
 def _normalize_base_url(url):
@@ -126,7 +139,19 @@ def resolve_market_profile(market_key=None, base_url_override=None):
         profile["prompts_file"] = PROMPTS_FILE
         prompts_path = project_path(PROMPTS_FILE)
     profile["prompts_path"] = prompts_path
+    if spec.get("runs_per_object") is not None:
+        profile["runs_per_object"] = int(spec["runs_per_object"])
     return profile
+
+
+def normalize_run_mode(value):
+    """Return a valid run mode: all | smoke | test."""
+    mode = " ".join(str(value or "").split()).lower()
+    if mode in RUN_MODES:
+        return mode
+    if mode in ("full", "regression", "complete"):
+        return "all"
+    return DEFAULT_RUN_MODE
 
 
 def market_choices():
@@ -143,7 +168,6 @@ PASSWORD = _env_or_default("DAKOTA_PASSWORD", "Agent2026")
 OBJECT_TYPE_COL = "hi"
 PROMPT_COL = "Prompt"
 MARKER_COL = "Marker"
-SMOKE_MARKER = "smoke"
 # Accepted header labels for the prompt column in older CSV exports.
 PROMPT_HEADER_NAMES = ("Prompt", "Prompt Text")
 

@@ -33,6 +33,22 @@ class PromptCsvTests(unittest.TestCase):
         for entry in smoke:
             self.assertEqual(ct._prompt_entry_marker(entry), "smoke")
 
+    def test_run_mode_all(self):
+        data = ct.load_prompts_from_csv(ct.PROMPTS_CSV)
+        entries = data[5]
+        all_entries = ct._filter_prompt_entries_for_run_mode(entries, "all")
+        self.assertGreater(len(all_entries), len(
+            ct._filter_prompt_entries_for_run_mode(entries, "smoke")
+        ))
+
+    def test_run_mode_test_prompts_file(self):
+        test_csv = ct.project_path("Prompts.test.csv")
+        data = ct.load_prompts_from_csv(test_csv)
+        self.assertIsNotNone(data)
+        entries = ct._filter_prompt_entries_for_run_mode(data[5], "all")
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(ct._prompt_entry_prompt(entries[0]), "Show me ria in usa")
+
     def test_expand_prompt_runs(self):
         prompts = ["p1", "p2"]
         rows = [1, 2]
@@ -51,6 +67,12 @@ class BenchmarkKeyTests(unittest.TestCase):
 
 
 class MarketProfileTests(unittest.TestCase):
+    def test_test_market_profile(self):
+        profile = ct.resolve_market_profile("test")
+        self.assertEqual(profile["key"], "test")
+        self.assertEqual(profile["prompts_file"], "Prompts.test.csv")
+        self.assertEqual(profile.get("runs_per_object"), 1)
+
     def test_marketplace_profile(self):
         profile = ct.resolve_market_profile("marketplace")
         self.assertEqual(profile["key"], "marketplace")

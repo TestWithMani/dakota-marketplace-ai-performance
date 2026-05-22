@@ -21,18 +21,18 @@ pipeline {
     parameters {
         choice(
             name: 'MARKET',
-            choices: ['marketplace', 'sandbox', 'uat', 'custom'],
-            description: 'Target Dakota environment (maps to base URL and optional prompts file)'
+            choices: ['marketplace', 'test', 'sandbox', 'uat', 'custom'],
+            description: 'Environment: test = single RIA prompt (Prompts.test.csv); marketplace = production'
+        )
+        choice(
+            name: 'RUN_MODE',
+            choices: ['smoke', 'test', 'all'],
+            description: 'Prompts to run: smoke (Marker=smoke), test (Marker=test), all (full CSV). Ignored when MARKET=test (uses Prompts.test.csv).'
         )
         string(
             name: 'CUSTOM_BASE_URL',
             defaultValue: '',
-            description: 'Required when MARKET=custom. Optional override for sandbox/uat if agent env vars are not set.'
-        )
-        booleanParam(
-            name: 'SMOKE_ONLY',
-            defaultValue: true,
-            description: 'Run only Prompts.csv rows where Marker=smoke'
+            description: 'Required when MARKET=custom. Optional override for sandbox/uat/test if agent env vars are not set.'
         )
         choice(
             name: 'BROWSER',
@@ -108,6 +108,8 @@ pipeline {
 
                     if (market == 'marketplace') {
                         resolvedUrl = marketplaceUrl
+                    } else if (market == 'test') {
+                        resolvedUrl = customUrl ?: (env.DAKOTA_TEST_URL ?: '').trim() ?: marketplaceUrl
                     } else if (market == 'sandbox') {
                         resolvedUrl = customUrl ?: (env.DAKOTA_SANDBOX_URL ?: '').trim()
                     } else if (market == 'uat') {
@@ -134,12 +136,21 @@ pipeline {
                     env.DAKOTA_MARKET = market
                     env.DAKOTA_BASE_URL = resolvedUrl
 
-                    currentBuild.description = "market=${market} | smoke=${params.SMOKE_ONLY} | ${params.BROWSER} | headless=${params.HEADLESS}"
+                    env.DAKOTA_RUN_MODE = params.RUN_MODE.trim().toLowerCase()
+                    def runsForBuild = params.RUNS_PER_OBJECT
+                    if (market == 'test') {
+                        env.DAKOTA_RUN_MODE = 'all'
+                        runsForBuild = '1'
+                    }
+                    env.EFFECTIVE_RUNS = runsForBuild
+
+                    currentBuild.description = "market=${market} | mode=${env.DAKOTA_RUN_MODE} | ${params.BROWSER} | headless=${params.HEADLESS}"
                     echo "Market: ${market}"
+                    echo "Run mode: ${env.DAKOTA_RUN_MODE}"
                     echo "Base URL: ${resolvedUrl}"
                     echo "Credential ID: ${DAKOTA_CREDENTIAL_ID}"
-                    echo "SMOKE_ONLY=${params.SMOKE_ONLY}, BROWSER=${params.BROWSER}, HEADLESS=${params.HEADLESS}"
-                    echo "TIMEOUT=${params.RESPONSE_TIMEOUT}, RUNS=${params.RUNS_PER_OBJECT}"
+                    echo "BROWSER=${params.BROWSER}, HEADLESS=${params.HEADLESS}"
+                    echo "TIMEOUT=${params.RESPONSE_TIMEOUT}, RUNS=${env.EFFECTIVE_RUNS}"
                 }
             }
         }
@@ -174,26 +185,27 @@ pipeline {
             steps {
                 catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                 script {
-                    def smokeFlag = params.SMOKE_ONLY ? '--smoke' : ''
                     def headlessFlag = params.HEADLESS ? '--headless' : ''
                     def baseUrlFlag = ''
                     if (params.MARKET == 'custom' || params.CUSTOM_BASE_URL?.trim()) {
                         baseUrlFlag = "--base-url \"${env.DAKOTA_BASE_URL}\""
                     }
+                    def effectiveRuns = env.EFFECTIVE_RUNS ?: params.RUNS_PER_OBJECT
                     def cmd = """
                         @echo off
                         cd /d "%WORKSPACE%"
                         call venv\\Scripts\\activate.bat
                         if exist allure-results rmdir /s /q allure-results
                         if exist allure-report  rmdir /s /q allure-report
-                        echo Running automation for market ${env.DAKOTA_MARKET}...
-                        "%VENV_PY%" -u chatbot_tester.py --market ${env.DAKOTA_MARKET} ${baseUrlFlag} ${smokeFlag} ${headlessFlag} --browser ${params.BROWSER} --timeout ${params.RESPONSE_TIMEOUT} --runs ${params.RUNS_PER_OBJECT}
+                        echo Running automation: market=${env.DAKOTA_MARKET} run-mode=${env.DAKOTA_RUN_MODE}...
+                        "%VENV_PY%" -u chatbot_tester.py --market ${env.DAKOTA_MARKET} --run-mode ${env.DAKOTA_RUN_MODE} ${baseUrlFlag} ${headlessFlag} --browser ${params.BROWSER} --timeout ${params.RESPONSE_TIMEOUT} --runs ${effectiveRuns}
                         echo Exit code: %ERRORLEVEL%
                         if errorlevel 1 exit /b %ERRORLEVEL%
                     """
                     def runEnv = [
                         "DAKOTA_MARKET=${env.DAKOTA_MARKET}",
                         "DAKOTA_BASE_URL=${env.DAKOTA_BASE_URL}",
+                        "DAKOTA_RUN_MODE=${env.DAKOTA_RUN_MODE}",
                         "BROWSER=${params.BROWSER}",
                     ]
                     if (params.USE_DAKOTA_CREDENTIALS) {
@@ -337,7 +349,7 @@ print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + 
                         "${env.BUILD_URL} (Allure report was not generated — see console log)"
                     def dateStr = new Date().format('yyyy-MM-dd')
                     def marketLabel = env.DAKOTA_MARKET ?: params.MARKET
-                    def modeLabel = params.SMOKE_ONLY ? 'Smoke' : 'Full'
+                    def modeLabel = (env.DAKOTA_RUN_MODE ?: params.RUN_MODE).capitalize()
 
                     def body = """
 <!DOCTYPE html>
@@ -439,7 +451,7 @@ print(str(total) + ',' + str(passed) + ',' + str(failed) + ',' + str(skipped) + 
                     }
                 }
             }
-            echo "Build ${currentBuild.currentResult} — market=${params.MARKET}, smoke=${params.SMOKE_ONLY}, browser=${params.BROWSER}"
+            echo "Build ${currentBuild.currentResult} — market=${params.MARKET}, mode=${params.RUN_MODE}, browser=${params.BROWSER}"
         }
         success {
             echo 'Pipeline finished (tests passed).'

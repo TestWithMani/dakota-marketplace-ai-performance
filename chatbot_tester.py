@@ -50,6 +50,7 @@ from config import (
     CHAT_RECOVERY_SLEEP_SECONDS,
     CONSOLE_EVENT_WAIT_SECONDS,
     DEFAULT_MARKET,
+    DEFAULT_RUN_MODE,
     MARKER_COL,
     OBJECT_TYPE_COL,
     PAGE_IDLE_AFTER_LOGIN,
@@ -60,13 +61,16 @@ from config import (
     RESPONSE_TIMEOUT,
     RUNS_PER_OBJECT,
     SCREENSHOTS_DIR as SCREENSHOTS_DIR_NAME,
+    RUN_MODES,
     SMOKE_MARKER,
+    TEST_MARKER,
     ENABLE_COORDINATE_FALLBACK,
     USE_DOM_FIRST_CHAT_OPEN,
     USE_DOM_FIRST_SEND,
     URL,
     USERNAME,
     market_choices,
+    normalize_run_mode,
     project_path,
     resolve_market_profile,
 )
@@ -211,6 +215,10 @@ def _is_smoke_marker(value):
     return _normalize_marker(value) == SMOKE_MARKER
 
 
+def _is_test_marker(value):
+    return _normalize_marker(value) == TEST_MARKER
+
+
 def _prompt_entry_row_idx(entry):
     return entry[0]
 
@@ -226,9 +234,27 @@ def _prompt_entry_marker(entry):
 def _filter_prompt_entries_for_smoke(prompt_entries, smoke_only):
     if not smoke_only:
         return list(prompt_entries)
-    return [
-        entry for entry in prompt_entries if _is_smoke_marker(_prompt_entry_marker(entry))
-    ]
+    return _filter_prompt_entries_for_run_mode(prompt_entries, "smoke")
+
+
+def _filter_prompt_entries_for_run_mode(prompt_entries, run_mode):
+    """Filter prompts by run mode: all | smoke | test (Marker column)."""
+    mode = normalize_run_mode(run_mode)
+    if mode == "all":
+        return list(prompt_entries)
+    if mode == "smoke":
+        filtered = [
+            entry
+            for entry in prompt_entries
+            if _is_smoke_marker(_prompt_entry_marker(entry))
+        ]
+    else:
+        filtered = [
+            entry
+            for entry in prompt_entries
+            if _is_test_marker(_prompt_entry_marker(entry))
+        ]
+    return filtered
 
 
 def load_prompts_from_csv(csv_path):
@@ -2254,15 +2280,24 @@ def _apply_market(market_key=None, base_url_override=None):
     PROMPTS_CSV = profile["prompts_path"]
     os.environ["DAKOTA_MARKET"] = profile["key"]
     os.environ["DAKOTA_BASE_URL"] = profile["base_url"]
+    if profile.get("runs_per_object") is not None:
+        global RUNS_PER_OBJECT
+        RUNS_PER_OBJECT = int(profile["runs_per_object"])
     return profile
 
 
 def _parse_cli_args(argv=None):
     parser = argparse.ArgumentParser(description="Dakota Joe chatbot prompt automation")
     parser.add_argument(
+        "--run-mode",
+        choices=RUN_MODES,
+        default=os.getenv("DAKOTA_RUN_MODE", DEFAULT_RUN_MODE),
+        help="Prompt set: all (full CSV), smoke (Marker=smoke), test (Marker=test)",
+    )
+    parser.add_argument(
         "--smoke",
         action="store_true",
-        help="Run only Prompts.csv rows with Marker set to smoke",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--headless",
@@ -2303,7 +2338,9 @@ def _parse_cli_args(argv=None):
 
 def main(argv=None):
     args = _parse_cli_args(argv)
-    smoke_only = bool(args.smoke)
+    run_mode = normalize_run_mode(
+        SMOKE_MARKER if args.smoke else args.run_mode
+    )
     headless = bool(args.headless)
     browser = (args.browser or "chrome").strip().lower()
     _apply_run_overrides(response_timeout=args.timeout, runs_per_object=args.runs)
@@ -2314,10 +2351,12 @@ def main(argv=None):
         print(f"Market configuration error: {exc}")
         return 1
 
+    if market_profile["key"] == "test":
+        run_mode = "all"
+
     print("=" * 60)
     print("Dakota Joe Chatbot Testing Script")
-    if smoke_only:
-        print("Mode: smoke only (Marker=smoke)")
+    print(f"Run mode: {run_mode}")
     print(f"Market: {market_profile['label']} ({market_profile['key']})")
     print(f"Base URL: {market_profile['base_url']}")
     print(f"Prompts file: {market_profile['prompts_file']}")
@@ -2335,15 +2374,14 @@ def main(argv=None):
         return 1
 
     rows, prompt_col, status_col, link_col, time_col, prompt_entries, header_row_idx, hi_col = data
-    if smoke_only:
-        prompt_entries = _filter_prompt_entries_for_smoke(prompt_entries, True)
-        if not prompt_entries:
-            print(
-                f"No smoke prompts found in {PROMPTS_CSV}. "
-                f"Set {MARKER_COL} to {SMOKE_MARKER} on the rows you want."
-            )
-            return 1
-        print(f"Smoke selection: {len(prompt_entries)} object prompt(s)")
+    prompt_entries = _filter_prompt_entries_for_run_mode(prompt_entries, run_mode)
+    if not prompt_entries:
+        print(
+            f"No prompts found for run mode '{run_mode}' in {PROMPTS_CSV}. "
+            f"Use {MARKER_COL}={SMOKE_MARKER}, {TEST_MARKER}, or run-mode=all."
+        )
+        return 1
+    print(f"Run mode '{run_mode}': {len(prompt_entries)} object prompt(s) selected")
 
     prompts = [_prompt_entry_prompt(entry) for entry in prompt_entries]
     row_indices = [_prompt_entry_row_idx(entry) for entry in prompt_entries]

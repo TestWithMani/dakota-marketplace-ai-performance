@@ -31,9 +31,9 @@ Script Path: `Jenkinsfile`
 
 | Parameter | Description |
 |-----------|-------------|
-| `MARKET` | `marketplace`, `sandbox`, `uat`, or `custom` |
-| `CUSTOM_BASE_URL` | URL override (required for `custom`; optional for sandbox/uat) |
-| `SMOKE_ONLY` | Smoke prompts only (default: true) |
+| `MARKET` | `marketplace`, `test`, `sandbox`, `uat`, `custom` |
+| `RUN_MODE` | `smoke`, `test`, or `all` (ignored when `MARKET=test`; uses `Prompts.test.csv`) |
+| `CUSTOM_BASE_URL` | URL override (required for `custom`; optional for sandbox/uat/test) |
 | `BROWSER` | chrome / edge / firefox |
 | `HEADLESS` | Headless browser |
 | `RESPONSE_TIMEOUT` | Link wait seconds (default 100) |
@@ -50,12 +50,13 @@ Set global environment variables on the agent or pass `CUSTOM_BASE_URL` per buil
 
 | Market | URL source |
 |--------|------------|
-| `marketplace` | Built-in production URL |
+| `marketplace` | Built-in production URL · `Prompts.csv` |
+| `test` | Production URL (or `DAKOTA_TEST_URL`) · **`Prompts.test.csv`** (1 RIA prompt, 1 run) |
 | `sandbox` | `DAKOTA_SANDBOX_URL` or `CUSTOM_BASE_URL` |
 | `uat` | `DAKOTA_UAT_URL` or `CUSTOM_BASE_URL` |
 | `custom` | `CUSTOM_BASE_URL` (required) |
 
-Optional per-market prompt files: `Prompts.sandbox.csv`, `Prompts.uat.csv` (falls back to `Prompts.csv`).
+Optional per-market prompt files: `Prompts.test.csv`, `Prompts.sandbox.csv`, `Prompts.uat.csv`.
 
 ## Agent requirements
 

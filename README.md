@@ -20,17 +20,21 @@ DAKOTA_USERNAME=
 DAKOTA_PASSWORD=
 ```
 
-Run smoke tests (3 smoke-marked prompts in `Prompts.csv`):
+Run modes (`--run-mode`):
+
+| Mode | What runs |
+|------|-----------|
+| `smoke` | Rows with `Marker=smoke` in the active prompts file (default) |
+| `test` | Rows with `Marker=test` |
+| `all` | Every prompt in the active prompts file |
 
 ```bash
-python chatbot_tester.py --smoke
+python chatbot_tester.py --run-mode smoke
+python chatbot_tester.py --run-mode all
+python chatbot_tester.py --market test
 ```
 
-Full prompt suite:
-
-```bash
-python chatbot_tester.py
-```
+**Test market** (`--market test`) uses `Prompts.test.csv` — one RIA prompt (`Show me ria in usa`), **1 run** only.
 
 ## Outputs
 
@@ -49,7 +53,7 @@ Parameterized pipeline: see `Jenkinsfile` and `jenkins/README.md`.
 
 1. Create credential ID **`sf-marketplace-creds`** (Dakota / Salesforce marketplace username/password).
 2. Create job **`dakota-gpt-performance`** from SCM (`Jenkinsfile` on `main`).
-3. Run with parameters: **SMOKE_ONLY**, **BROWSER**, **HEADLESS**, etc.
+3. Run with parameters: **MARKET**, **RUN_MODE** (smoke / test / all), **BROWSER**, **HEADLESS**, etc.
 
 ```powershell
 $env:JENKINS_URL = 'http://your-jenkins:8080'
