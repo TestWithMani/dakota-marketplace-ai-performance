@@ -910,20 +910,43 @@ def _generate_allure_report(total, passed, failed):
     summary_path = os.path.join(ALLURE_RESULTS_DIR, "run-summary.txt")
     with open(summary_path, "w", encoding="utf-8") as f:
         f.write(f"Total={total}\nPassed={passed}\nFailed={failed}\n")
+    def _run_allure_generate():
+        candidates = [
+            ["allure", "generate", "allure-results", "-o", "allure-report", "--clean"],
+            ["npx", "allure", "generate", "allure-results", "-o", "allure-report", "--clean"],
+        ]
+        if os.name == "nt":
+            appdata = os.environ.get("APPDATA", "")
+            if appdata:
+                allure_cmd = os.path.join(appdata, "npm", "allure.cmd")
+                if os.path.exists(allure_cmd):
+                    candidates.insert(
+                        0,
+                        [allure_cmd, "generate", "allure-results", "-o", "allure-report", "--clean"],
+                    )
+        last_err = ""
+        for cmd in candidates:
+            try:
+                r = subprocess.run(
+                    cmd,
+                    cwd=_SCRIPT_DIR,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    shell=(os.name == "nt" and cmd[0].endswith(".cmd")),
+                )
+                if r.returncode == 0:
+                    return True
+                last_err = (r.stderr or r.stdout or "").strip()
+            except FileNotFoundError as exc:
+                last_err = str(exc)
+        if last_err:
+            print(f"  {last_err}")
+        return False
+
     try:
-        cmd = ["allure", "generate", "allure-results", "-o", "allure-report", "--clean"]
-        r = subprocess.run(
-            cmd,
-            cwd=_SCRIPT_DIR,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if r.returncode != 0:
+        if not _run_allure_generate():
             print("Allure report generation skipped (CLI not found or failed).")
-            err = (r.stderr or r.stdout or "").strip()
-            if err:
-                print(f"  {err}")
             return
 
         index_path = os.path.join(ALLURE_REPORT_DIR, "index.html")

@@ -61,5 +61,9 @@ Optional per-market prompt files: `Prompts.sandbox.csv`, `Prompts.uat.csv` (fall
 
 - Windows with Chrome (and Edge/Firefox if selected)
 - Python 3.11+ on PATH
-- Node.js + `npm install -g allure-commandline`
+- **Node.js** on PATH (`C:\Program Files\nodejs` or set Jenkins `NODE_PATH`)
+- **JDK 8+** on PATH (`java` must work — Allure CLI needs Java)
+- **Allure CLI**: installed automatically via `npm install -g allure-commandline` in the **Setup Node and Allure** stage if missing
 - Email Extension plugin
+
+If Allure generation fails, the build is marked **UNSTABLE** but email and Excel archive still run.

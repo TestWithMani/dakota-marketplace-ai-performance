@@ -168,6 +168,44 @@ pipeline {
             }
         }
 
+        stage('Setup Node and Allure') {
+            steps {
+                bat """
+                    @echo off
+                    cd /d "%WORKSPACE%"
+                    set "PATH=${NODE_PATH};${NPM_PATH};%PATH%"
+                    if exist "${NODE_PATH}\\node.exe" set "PATH=${NODE_PATH};%PATH%"
+                    if exist "%APPDATA%\\npm" set "PATH=%APPDATA%\\npm;%PATH%"
+                    echo === Node.js ===
+                    where node >nul 2>&1
+                    if errorlevel 1 (
+                        echo ERROR: Node.js not found. Install Node.js on this Jenkins agent or set NODE_PATH.
+                        exit /b 1
+                    )
+                    node --version
+                    echo === Java (required by Allure CLI) ===
+                    where java >nul 2>&1
+                    if errorlevel 1 (
+                        echo ERROR: Java not found. Install JDK 8+ on this Jenkins agent and add java to PATH.
+                        exit /b 1
+                    )
+                    java -version
+                    echo === Allure CLI ===
+                    where allure >nul 2>&1
+                    if errorlevel 1 (
+                        echo Installing allure-commandline via npm...
+                        call npm install -g allure-commandline
+                    )
+                    where allure >nul 2>&1
+                    if errorlevel 1 (
+                        echo ERROR: Allure CLI not available after npm install.
+                        exit /b 1
+                    )
+                    allure --version
+                """
+            }
+        }
+
         stage('Run Dakota Automation') {
             steps {
                 script {
@@ -223,30 +261,44 @@ pipeline {
                 expression { return params.GENERATE_ALLURE }
             }
             steps {
-                bat '''
-                    @echo off
-                    cd /d "%WORKSPACE%"
-                    set PATH=%NODE_PATH%;%NPM_PATH%;%PATH%
-                    if not exist allure-results (
-                        echo ERROR: allure-results folder missing.
-                        exit /b 1
-                    )
-                    node --version
-                    call "%ALLURE_CMD%" generate allure-results --clean -o allure-report
-                    if errorlevel 1 exit /b 1
-                    dir allure-report
-                '''
+                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                    bat """
+                        @echo off
+                        cd /d "%WORKSPACE%"
+                        set "PATH=${NODE_PATH};${NPM_PATH};%PATH%"
+                        if exist "${NODE_PATH}\\node.exe" set "PATH=${NODE_PATH};%PATH%"
+                        if exist "%APPDATA%\\npm" set "PATH=%APPDATA%\\npm;%PATH%"
+                        if not exist allure-results (
+                            echo ERROR: allure-results folder missing.
+                            exit /b 1
+                        )
+                        node --version
+                        java -version
+                        allure generate allure-results --clean -o allure-report
+                        if errorlevel 1 exit /b 1
+                        if not exist allure-report\\index.html (
+                            echo ERROR: allure-report\\index.html was not created.
+                            exit /b 1
+                        )
+                        echo Allure report ready.
+                        dir allure-report
+                    """
+                }
             }
         }
 
         stage('Archive Reports') {
-            when {
-                expression { return params.GENERATE_ALLURE }
-            }
             steps {
-                archiveArtifacts artifacts: 'allure-report/**,Performance evaluation results.xlsx',
-                    fingerprint: true,
-                    allowEmptyArchive: true
+                script {
+                    if (fileExists('allure-report/index.html')) {
+                        archiveArtifacts artifacts: 'allure-report/**', fingerprint: true, allowEmptyArchive: true
+                    } else {
+                        echo 'Skipping Allure archive (report not generated).'
+                    }
+                    if (fileExists('Performance evaluation results.xlsx')) {
+                        archiveArtifacts artifacts: 'Performance evaluation results.xlsx', fingerprint: true, allowEmptyArchive: true
+                    }
+                }
             }
         }
 
