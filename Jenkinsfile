@@ -374,10 +374,34 @@ def validateRuntimeParameters(
     }
 }
 
+def readLastStdoutLine(String output) {
+    if (!output?.trim()) {
+        return ''
+    }
+    def lines = output.readLines().collect { it?.trim() }.findAll { it }
+    return lines ? lines.last() : ''
+}
+
 def formatEmailSubjectDate() {
-    // Sandbox-safe (java.util.Date has no Groovy format(Locale) in Jenkins CPS).
-    def sdf = new java.text.SimpleDateFormat('MMMM d, yyyy', java.util.Locale.ENGLISH)
-    return sdf.format(new Date())
+    // Use Python (already on agent) — SimpleDateFormat/Locale are blocked by Jenkins sandbox.
+    try {
+        writeFile file: 'format_email_date.py', text: '''
+from datetime import date
+today = date.today()
+print(f"{today.strftime('%B')} {today.day}, {today.year}")
+'''
+        def out = bat(
+            script: "@\"${env.VENV_PY}\" format_email_date.py",
+            returnStdout: true
+        ).trim()
+        def line = readLastStdoutLine(out)
+        if (line) {
+            return line
+        }
+    } catch (Exception ex) {
+        echo "Email date formatting fallback: ${ex.message}"
+    }
+    return new Date().format('yyyy-MM-dd')
 }
 
 def getTestStatistics() {
@@ -413,7 +437,10 @@ print(','.join([str(total), str(passed), str(failed), str(skipped)]))
             script: "@\"${env.VENV_PY}\" parse_allure_stats.py",
             returnStdout: true
         ).trim()
-        def lastLine = parseOut.readLines().last().trim()
+        def lastLine = readLastStdoutLine(parseOut)
+        if (!lastLine) {
+            return stats
+        }
         def parts = lastLine.split(',')
         if (parts.size() >= 4) {
             stats.total = (parts[0] ?: '0') as int
@@ -451,7 +478,7 @@ print('|'.join(names))
             script: "@\"${env.VENV_PY}\" parse_allure_failures.py",
             returnStdout: true
         ).trim()
-        def lastLine = parseOut.readLines().last().trim()
+        def lastLine = readLastStdoutLine(parseOut)
         if (lastLine) {
             failures = lastLine.tokenize('|').findAll { it?.trim() }.unique()
         }
