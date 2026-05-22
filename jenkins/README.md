@@ -61,16 +61,11 @@ Optional per-market prompt files: `Prompts.sandbox.csv`, `Prompts.uat.csv` (fall
 
 - Windows with Chrome (and Edge/Firefox if selected)
 - Python 3.11+ on PATH
-- **Node.js** on PATH (`C:\Program Files\nodejs` or set Jenkins `NODE_PATH`)
-- **JDK 8+** on PATH (`java` must work — Allure CLI needs Java)
-- **Allure CLI**: installed automatically via `npm install -g allure-commandline` in the **Setup Node and Allure** stage if missing
+- **JDK 8+** on PATH (`java -version` must work)
 - Email Extension plugin
 
+**Allure** is downloaded automatically (standalone zip from GitHub) in the **post-build** step. **Node.js is not required.**
+
+Allure and email run in **`post { always }`** — even when the automation stage fails.
+
 If Allure generation fails, the build is marked **UNSTABLE** but email and Excel archive still run.
-
-**Automation does not require Node.js** — only the Allure stage does. If Node is not installed yet, either:
-
-- Uncheck **GENERATE_ALLURE** to run tests + email without HTML report, or  
-- Install **Node.js LTS** on the Jenkins agent to `C:\Program Files\nodejs` and re-run.
-
-Optional Jenkins global environment variables: `NODE_PATH`, `NPM_PATH`.
