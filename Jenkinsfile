@@ -18,7 +18,7 @@ pipeline {
     }
 
     triggers {
-        cron('0 17 * * 1')
+        cron('30 17 * * 1')
     }
 
     parameters {
@@ -132,7 +132,7 @@ pipeline {
                     echo "TIMEOUT=${cfg.responseTimeout}, RUNS=${cfg.runsPerObject}"
                     echo "FRESH_REPORT_OUTPUT=${cfg.freshReportOutput}, GENERATE_ALLURE=${cfg.generateAllure}"
                     if (cfg.scheduledBuild) {
-                        echo 'Scheduled run detected: applying Monday 5:00 PM preset parameters.'
+                        echo 'Scheduled run detected: applying Monday 5:30 PM preset parameters.'
                     }
                 }
             }
@@ -326,9 +326,9 @@ def isScheduledBuild() {
 
 def getEffectiveRunConfig() {
     def scheduled = isScheduledBuild()
-    def market = scheduled ? 'test' : (params.MARKET ?: 'marketplace').trim().toLowerCase()
-    def runMode = scheduled ? 'test' : (params.RUN_MODE ?: 'smoke').trim().toLowerCase()
-    def runsPerObject = scheduled ? '1' : (params.RUNS_PER_OBJECT ?: '3').trim()
+    def market = scheduled ? 'marketplace' : (params.MARKET ?: 'marketplace').trim().toLowerCase()
+    def runMode = scheduled ? 'all' : (params.RUN_MODE ?: 'smoke').trim().toLowerCase()
+    def runsPerObject = scheduled ? '3' : (params.RUNS_PER_OBJECT ?: '3').trim()
 
     if (market == 'test') {
         runMode = 'all'
@@ -350,10 +350,10 @@ def getEffectiveRunConfig() {
         generateAllure           : scheduled ? true : (params.GENERATE_ALLURE as boolean),
         sendEmail                : scheduled ? true : (params.SEND_EMAIL as boolean),
         emailRecipients          : scheduled
-            ? 'omer.shafiq@rolustech.com'
+            ? 'pstanley@dakota.com'
             : (params.EMAIL_RECIPIENTS ?: '').trim(),
         additionalEmailRecipients: scheduled
-            ? 'usman.arshad@rolustech.com'
+            ? 'omer.shafiq@rolustech.net, dakota.ai@rolustech.com, wishma.khurram@rolustech.com'
             : (params.ADDITIONAL_EMAIL_RECIPIENTS ?: '').trim(),
         useCredentials           : scheduled ? true : (params.USE_DAKOTA_CREDENTIALS as boolean),
     ]
