@@ -18,7 +18,7 @@ pipeline {
     }
 
     triggers {
-        cron('30 17 * * 1')
+        cron('0 12 * * 1')
     }
 
     parameters {
@@ -132,7 +132,7 @@ pipeline {
                     echo "TIMEOUT=${cfg.responseTimeout}, RUNS=${cfg.runsPerObject}"
                     echo "FRESH_REPORT_OUTPUT=${cfg.freshReportOutput}, GENERATE_ALLURE=${cfg.generateAllure}"
                     if (cfg.scheduledBuild) {
-                        echo 'Scheduled run detected: applying Monday 5:30 PM preset parameters.'
+                        echo 'Scheduled run detected: applying Monday 12:00 PM preset parameters.'
                     }
                 }
             }
@@ -346,7 +346,7 @@ def getEffectiveRunConfig() {
         headless                 : scheduled ? false : (params.HEADLESS as boolean),
         responseTimeout          : scheduled ? '100' : (params.RESPONSE_TIMEOUT ?: '100').trim(),
         runsPerObject            : runsPerObject,
-        freshReportOutput        : scheduled ? true : (params.FRESH_REPORT_OUTPUT as boolean),
+        freshReportOutput        : scheduled ? false : (params.FRESH_REPORT_OUTPUT as boolean),
         generateAllure           : scheduled ? true : (params.GENERATE_ALLURE as boolean),
         sendEmail                : scheduled ? true : (params.SEND_EMAIL as boolean),
         emailRecipients          : scheduled
