@@ -17,6 +17,10 @@ pipeline {
         timeout(time: 180, unit: 'MINUTES')
     }
 
+    triggers {
+        cron('0 17 * * 1')
+    }
+
     parameters {
         choice(
             name: 'MARKET',
@@ -127,6 +131,9 @@ pipeline {
                     echo "BROWSER=${cfg.browser}, HEADLESS=${cfg.headless}"
                     echo "TIMEOUT=${cfg.responseTimeout}, RUNS=${cfg.runsPerObject}"
                     echo "FRESH_REPORT_OUTPUT=${cfg.freshReportOutput}, GENERATE_ALLURE=${cfg.generateAllure}"
+                    if (cfg.scheduledBuild) {
+                        echo 'Scheduled run detected: applying Monday 5:00 PM preset parameters.'
+                    }
                 }
             }
         }
@@ -301,10 +308,27 @@ pipeline {
 // Shared helpers (same style as salesforce_tab_performance Jenkinsfile)
 // ---------------------------------------------------------------------------
 
+def isScheduledBuild() {
+    try {
+        def timerCauses = currentBuild?.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause') ?: []
+        if (!timerCauses.isEmpty()) {
+            return true
+        }
+        def genericCauses = currentBuild?.getBuildCauses() ?: []
+        return genericCauses.any { cause ->
+            def cls = cause?._class ?: ''
+            return cls.contains('TimerTriggerCause')
+        }
+    } catch (Exception ignored) {
+        return false
+    }
+}
+
 def getEffectiveRunConfig() {
-    def market = (params.MARKET ?: 'marketplace').trim().toLowerCase()
-    def runMode = (params.RUN_MODE ?: 'smoke').trim().toLowerCase()
-    def runsPerObject = (params.RUNS_PER_OBJECT ?: '3').trim()
+    def scheduled = isScheduledBuild()
+    def market = scheduled ? 'test' : (params.MARKET ?: 'marketplace').trim().toLowerCase()
+    def runMode = scheduled ? 'test' : (params.RUN_MODE ?: 'smoke').trim().toLowerCase()
+    def runsPerObject = scheduled ? '1' : (params.RUNS_PER_OBJECT ?: '3').trim()
 
     if (market == 'test') {
         runMode = 'all'
@@ -314,19 +338,24 @@ def getEffectiveRunConfig() {
     }
 
     return [
+        scheduledBuild           : scheduled,
         market                   : market,
         runMode                  : runMode,
         baseUrl                  : resolveMarketUrl(market, params.CUSTOM_BASE_URL?.trim() ?: ''),
-        browser                  : (params.BROWSER ?: 'chrome').trim().toLowerCase(),
-        headless                 : params.HEADLESS as boolean,
-        responseTimeout          : (params.RESPONSE_TIMEOUT ?: '100').trim(),
+        browser                  : scheduled ? 'chrome' : (params.BROWSER ?: 'chrome').trim().toLowerCase(),
+        headless                 : scheduled ? false : (params.HEADLESS as boolean),
+        responseTimeout          : scheduled ? '100' : (params.RESPONSE_TIMEOUT ?: '100').trim(),
         runsPerObject            : runsPerObject,
-        freshReportOutput        : params.FRESH_REPORT_OUTPUT as boolean,
-        generateAllure           : params.GENERATE_ALLURE as boolean,
-        sendEmail                : params.SEND_EMAIL as boolean,
-        emailRecipients          : (params.EMAIL_RECIPIENTS ?: '').trim(),
-        additionalEmailRecipients: (params.ADDITIONAL_EMAIL_RECIPIENTS ?: '').trim(),
-        useCredentials           : params.USE_DAKOTA_CREDENTIALS as boolean,
+        freshReportOutput        : scheduled ? true : (params.FRESH_REPORT_OUTPUT as boolean),
+        generateAllure           : scheduled ? true : (params.GENERATE_ALLURE as boolean),
+        sendEmail                : scheduled ? true : (params.SEND_EMAIL as boolean),
+        emailRecipients          : scheduled
+            ? 'omer.shafiq@rolustech.com'
+            : (params.EMAIL_RECIPIENTS ?: '').trim(),
+        additionalEmailRecipients: scheduled
+            ? 'usman.arshad@rolustech.com'
+            : (params.ADDITIONAL_EMAIL_RECIPIENTS ?: '').trim(),
+        useCredentials           : scheduled ? true : (params.USE_DAKOTA_CREDENTIALS as boolean),
     ]
 }
 
