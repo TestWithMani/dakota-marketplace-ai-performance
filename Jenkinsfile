@@ -74,7 +74,7 @@ pipeline {
         )
         string(
             name: 'EMAIL_RECIPIENTS',
-            defaultValue: 'usman.arshad@rolustech.com',
+            defaultValue: 'draftcrm@rolustech.com',
             description: 'Primary comma-separated recipients for the report email'
         )
         string(
