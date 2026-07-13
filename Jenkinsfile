@@ -17,9 +17,9 @@ pipeline {
         timeout(time: 180, unit: 'MINUTES')
     }
 
-    triggers {
-        cron('0 12 * * 1')
-    }
+    // triggers {
+    //     cron('0 12 * * 1')  // Monday 12:00 PM — disabled
+    // }
 
     parameters {
         choice(
@@ -74,7 +74,7 @@ pipeline {
         )
         string(
             name: 'EMAIL_RECIPIENTS',
-            defaultValue: 'draftcrm@rolustech.com',
+            defaultValue: 'usman.arshad@rolustech.com',
             description: 'Primary comma-separated recipients for the report email'
         )
         string(
