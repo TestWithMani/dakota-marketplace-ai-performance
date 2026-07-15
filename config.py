@@ -196,8 +196,8 @@ def market_choices():
 # --- Marketplace login (default market until apply_market / CLI runs) ---
 _active = resolve_market_profile(DEFAULT_MARKET)
 URL = _active["base_url"]
-USERNAME = _env_or_default("DAKOTA_USERNAME", "aleeta.fatima@dakota.net.marketplace")
-PASSWORD = _env_or_default("DAKOTA_PASSWORD", "Agent2026")
+USERNAME = _env_or_default("DAKOTA_USERNAME", "test_automation@dakota.com")
+PASSWORD = _env_or_default("DAKOTA_PASSWORD", "@#$%1234uatest%%")
 
 OBJECT_TYPE_COL = "hi"
 PROMPT_COL = "Prompt"

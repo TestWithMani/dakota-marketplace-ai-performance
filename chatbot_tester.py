@@ -37,6 +37,8 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 import config as app_config
 from config import (
@@ -1066,6 +1068,179 @@ def _generate_allure_report(total, passed, failed):
     except Exception as exc:
         print(f"Allure report generation skipped: {exc}")
 
+# --- Salesforce Experience Cloud login form ---
+# Username is flaky on this form: password focus / partial page settle can leave the
+# email blank. We re-find fields, verify both values, and refill username if it was
+# cleared before submit.
+LOGIN_FILL_RETRIES = 3
+
+USERNAME_LOCATORS = [
+    (By.ID, "loginPage:loginForm:login-email"),
+    (By.NAME, "username"),
+    (By.CSS_SELECTOR, "input[type='email']"),
+    (By.CSS_SELECTOR, "input[autocomplete='username']"),
+    (By.XPATH, "//input[@placeholder='Username or Email']"),
+]
+PASSWORD_LOCATORS = [
+    (By.ID, "loginPage:loginForm:login-password"),
+    (By.NAME, "password"),
+    (By.CSS_SELECTOR, "input[type='password']"),
+    (By.CSS_SELECTOR, "input[autocomplete='current-password']"),
+]
+LOGIN_BUTTON_LOCATORS = [
+    (By.ID, "loginPage:loginForm:login-submit"),
+    (By.CSS_SELECTOR, "button[type='submit']"),
+    (By.CSS_SELECTOR, "input[type='submit']"),
+    (By.XPATH, "//button[contains(.,'Log In') or contains(.,'Login')]"),
+]
+# Narrower set used only to decide whether the sign-in form is present (avoids false
+# positives from generic email/password inputs on the authenticated marketplace).
+LOGIN_PAGE_DETECT_LOCATORS = [
+    (By.XPATH, "//input[@placeholder='Username or Email']"),
+    (By.ID, "loginPage:loginForm:login-email"),
+    (By.NAME, "username"),
+]
+
+
+def _login_find_first_visible(driver, locators):
+    """Return the first displayed + enabled element among the given locators."""
+    for locator in locators:
+        for element in driver.find_elements(*locator):
+            try:
+                if element.is_displayed() and element.is_enabled():
+                    return element
+            except Exception:
+                continue
+    return None
+
+
+def _login_wait_for_visible_field(driver, locators, timeout=30):
+    """Wait until one of the locators resolves to a visible field, then return it."""
+    return WebDriverWait(driver, timeout).until(
+        lambda d: _login_find_first_visible(d, locators)
+    )
+
+
+def _login_field_value(driver, field):
+    """Read a field's current value (attribute first, JS fallback)."""
+    try:
+        raw = field.get_attribute("value")
+        if raw is not None and str(raw).strip():
+            return str(raw).strip()
+    except Exception:
+        pass
+    try:
+        via_js = driver.execute_script("return arguments[0].value || '';", field)
+        return str(via_js or "").strip()
+    except Exception:
+        return ""
+
+
+def _login_js_set_value(driver, field, value):
+    """Set value with the native setter + events (Aura / Lightning-safe)."""
+    driver.execute_script(
+        """
+        const el = arguments[0];
+        const val = arguments[1];
+        el.focus();
+        const proto = window.HTMLInputElement.prototype;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (descriptor && descriptor.set) {
+            descriptor.set.call(el, val);
+        } else {
+            el.value = val;
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+        """,
+        field,
+        value,
+    )
+
+
+def _login_set_input_value(driver, field, value, label):
+    """Populate a login field reliably: JS native setter first, send_keys fallback."""
+    WebDriverWait(driver, 30).until(
+        lambda _: field.is_displayed() and field.is_enabled()
+    )
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", field)
+    try:
+        driver.execute_script("arguments[0].click();", field)
+    except Exception:
+        pass
+    time.sleep(0.25)
+
+    # Prefer JS set first — more reliable on Salesforce login than send_keys alone.
+    _login_js_set_value(driver, field, value)
+    time.sleep(0.2)
+
+    if _login_field_value(driver, field) != value.strip():
+        try:
+            field.send_keys(Keys.CONTROL, "a")
+            field.send_keys(Keys.BACKSPACE)
+        except Exception:
+            try:
+                field.clear()
+            except Exception:
+                pass
+        field.send_keys(value)
+        time.sleep(0.3)
+
+    if _login_field_value(driver, field) != value.strip():
+        _login_js_set_value(driver, field, value)
+        time.sleep(0.2)
+
+    actual = _login_field_value(driver, field)
+    if actual != value.strip():
+        raise ValueError(
+            f"Could not populate login {label}. Expected '{value}', got '{actual}'"
+        )
+
+
+def _login_fill_credentials(driver, user, pwd):
+    """Fill username then password, and re-check username after the password fill."""
+    username_field = _login_wait_for_visible_field(driver, USERNAME_LOCATORS)
+    _login_set_input_value(driver, username_field, user, "username")
+
+    password_field = _login_wait_for_visible_field(driver, PASSWORD_LOCATORS)
+    _login_set_input_value(driver, password_field, pwd, "password")
+
+    # Password focus / autofill often clears username on this form.
+    username_field = _login_wait_for_visible_field(driver, USERNAME_LOCATORS)
+    if _login_field_value(driver, username_field) != user.strip():
+        print("[Login] Username was empty/cleared after password fill — refilling.")
+        _login_set_input_value(driver, username_field, user, "username")
+
+    password_field = _login_wait_for_visible_field(driver, PASSWORD_LOCATORS)
+    if _login_field_value(driver, password_field) != pwd.strip():
+        print("[Login] Password missing after username refill — refilling.")
+        _login_set_input_value(driver, password_field, pwd, "password")
+        # Final username check after the second password fill.
+        username_field = _login_wait_for_visible_field(driver, USERNAME_LOCATORS)
+        if _login_field_value(driver, username_field) != user.strip():
+            _login_set_input_value(driver, username_field, user, "username")
+
+    username_field = _login_wait_for_visible_field(driver, USERNAME_LOCATORS)
+    password_field = _login_wait_for_visible_field(driver, PASSWORD_LOCATORS)
+    user_actual = _login_field_value(driver, username_field)
+    pwd_actual = _login_field_value(driver, password_field)
+    if user_actual != user.strip() or pwd_actual != pwd.strip():
+        raise ValueError(
+            f"Login fields not ready. username='{user_actual}', "
+            f"password_len={len(pwd_actual)} (expected {len(pwd.strip())})"
+        )
+    print(
+        f"[Login] Credentials verified "
+        f"(username_len={len(user_actual)}, password_len={len(pwd_actual)})."
+    )
+
+
+def _find_login_button(driver):
+    """Return the first visible + enabled login submit control, if present."""
+    return _login_find_first_visible(driver, LOGIN_BUTTON_LOCATORS)
+
+
 def login(driver):
     """Open the marketplace and sign in when the login form is shown."""
     if not USERNAME or not PASSWORD:
@@ -1099,24 +1274,54 @@ def login(driver):
 
     if _is_login_page(driver):
         print("Logging in...")
-        try:
-            from selenium.webdriver.support import expected_conditions as EC
-            from selenium.webdriver.support.ui import WebDriverWait
 
-            wait = WebDriverWait(driver, 30)
-            username = wait.until(
-                EC.element_to_be_clickable(
-                    (By.XPATH, "//input[@placeholder='Username or Email']")
+        # Allow Experience Cloud / Aura handlers to attach before interacting.
+        try:
+            _login_wait_for_visible_field(driver, USERNAME_LOCATORS)
+            _login_wait_for_visible_field(driver, PASSWORD_LOCATORS)
+        except Exception:
+            pass
+        time.sleep(1.0)
+
+        last_error = None
+        for attempt in range(1, LOGIN_FILL_RETRIES + 1):
+            try:
+                print(
+                    f"[Login] Filling credentials "
+                    f"(attempt {attempt}/{LOGIN_FILL_RETRIES})..."
                 )
-            )
-            username.clear()
-            username.send_keys(USERNAME)
-            password = wait.until(
-                EC.element_to_be_clickable((By.XPATH, "//input[@type='password']"))
-            )
-            password.clear()
-            password.send_keys(PASSWORD)
-            password.send_keys(Keys.RETURN)
+                _login_fill_credentials(driver, USERNAME, PASSWORD)
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                print(f"[Login] Fill attempt {attempt} failed: {exc}")
+                time.sleep(1.0)
+
+        if last_error is not None:
+            print(f"Login error: {last_error}")
+            return False
+
+        try:
+            login_btn = _find_login_button(driver)
+            if login_btn is not None:
+                try:
+                    WebDriverWait(driver, 30).until(
+                        EC.element_to_be_clickable(login_btn)
+                    )
+                except Exception:
+                    pass
+                try:
+                    login_btn.click()
+                except Exception:
+                    driver.execute_script("arguments[0].click();", login_btn)
+            else:
+                # No dedicated button found — submit via Enter on the password field.
+                password_field = _login_wait_for_visible_field(
+                    driver, PASSWORD_LOCATORS
+                )
+                password_field.send_keys(Keys.RETURN)
+
             WebDriverWait(driver, 60).until(lambda d: not _is_login_page(d))
             print("Login successful!")
         except Exception as e:
@@ -1137,9 +1342,10 @@ def _is_login_page(driver):
         if "signin" in (driver.current_url or "").lower():
             return True
         driver.switch_to.default_content()
-        return bool(
-            driver.find_elements(By.XPATH, "//input[@placeholder='Username or Email']")
-        )
+        for locator in LOGIN_PAGE_DETECT_LOCATORS:
+            if driver.find_elements(*locator):
+                return True
+        return False
     except (NoSuchWindowException, WebDriverException):
         return True
     except Exception:
