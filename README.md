@@ -2,7 +2,7 @@
 
 Selenium automation for **Dakota Joe** chatbot performance testing on the Dakota Marketplace.
 
-**Repository:** [https://github.com/TestWithMani/dakota_gpt_performance](https://github.com/TestWithMani/dakota_gpt_performance)
+**Repository:** [https://github.com/TestWithMani/dakota-marketplace-ai-performance](https://github.com/TestWithMani/dakota-marketplace-ai-performance)
 
 ## Quick start
 

@@ -19,6 +19,9 @@ screenshots/
 allure-results/
 allure-report/
 report_link_api_responses.log
+tests/_full_run_log.txt
+tests/_*.py
+tests/_*.txt
 
 # Generated performance output (created on each run)
 Performance evaluation results.xlsx

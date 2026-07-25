@@ -1637,156 +1637,110 @@ def _wait_for_send_button_near_textarea(driver, textarea, timeout_s=7):
         time.sleep(0.1)
     return None
 
-def _try_click_end_chat_in_current_context(driver):
-    """In current context: click End chat if visible, else click exact header Menu button."""
-    try:
-        state = driver.execute_script(
-            """
-            function isVisible(el) {
-              try {
-                if (!el) return false;
-                const st = window.getComputedStyle(el);
-                if (!st || st.visibility === 'hidden' || st.display === 'none') return false;
-                const r = el.getBoundingClientRect();
-                return r.width > 0 && r.height > 0;
-              } catch(e) { return false; }
-            }
-            function lowerText(el) {
-              return ((el && (el.innerText || el.textContent)) || '').trim().toLowerCase();
-            }
-            function attr(el, name) {
-              try { return (el.getAttribute(name) || '').trim().toLowerCase(); } catch(e) { return ''; }
-            }
-            function deepCollect(root, pred, out) {
-              out = out || [];
-              if (!root) return out;
-              try {
-                const tw = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
-                let n = tw.currentNode;
-                while (n) {
-                  try {
-                    if (pred(n)) out.push(n);
-                    if (n.shadowRoot) deepCollect(n.shadowRoot, pred, out);
-                  } catch(e) {}
-                  n = tw.nextNode();
-                }
-              } catch(e) {}
-              return out;
-            }
+# Embedded Messaging chat iframe + End chat SVG path (user-provided XPaths).
+EMBEDDED_MESSAGING_IFRAME_XPATH = "//div[@id='embedded-messaging']//iframe[1]"
+END_CHAT_PATH_XPATH = "(//*[name()='path'])[3]"
 
-            const endTargets = deepCollect(document, (el) => {
-              if (!isVisible(el)) return false;
-              const t = lowerText(el);
-              const aria = attr(el, 'aria-label');
-              const title = attr(el, 'title');
-              const role = attr(el, 'role');
-              const tag = (el.tagName || '').toLowerCase();
-              const clickable = tag === 'button' || tag === 'a' || role === 'menuitem' || role === 'button' || !!el.onclick;
-              if (!clickable) return false;
-              return t.includes('end chat') || aria.includes('end chat') || title.includes('end chat');
-            });
-            if (endTargets.length) {
-              endTargets
-                .map((el) => ({ el, r: el.getBoundingClientRect() }))
-                .sort((a, b) => (a.r.top - b.r.top) || (b.r.width - a.r.width));
-              const target = endTargets[0];
-              target.click();
-              return 'ended';
-            }
-
-            // Exact button requested by user:
-            // <button class="headerButton menuButton" title="Menu" aria-label="Menu">
-            const exactMenuButtons = deepCollect(document, (el) => {
-              if (!isVisible(el)) return false;
-              const tag = (el.tagName || '').toLowerCase();
-              if (tag !== 'button') return false;
-              const cls = attr(el, 'class');
-              const title = attr(el, 'title');
-              const aria = attr(el, 'aria-label');
-              return cls.includes('headerbutton') && cls.includes('menubutton') && title === 'menu' && aria === 'menu';
-            });
-            if (exactMenuButtons.length) {
-              const menu = exactMenuButtons
-                .map((el) => ({ el, r: el.getBoundingClientRect() }))
-                .sort((a, b) => (a.r.top - b.r.top) || (b.r.right - a.r.right))[0].el;
-              menu.click();
-              return 'menu_opened';
-            }
-
-            // Fallback: any button with title/aria label "Menu"
-            const menuByLabel = deepCollect(document, (el) => {
-              if (!isVisible(el)) return false;
-              const tag = (el.tagName || '').toLowerCase();
-              if (tag !== 'button') return false;
-              const title = attr(el, 'title');
-              const aria = attr(el, 'aria-label');
-              return title === 'menu' || aria === 'menu';
-            });
-            if (menuByLabel.length) {
-              menuByLabel[0].click();
-              return 'menu_opened';
-            }
-            return 'none';
-            """
-        )
-        return state or "none"
-    except Exception:
-        return "none"
 
 def end_chat_session_from_header(driver, timeout_s=16):
-    """Click Menu button -> End chat; returns True on success."""
+    """End chat via embedded-messaging iframe + SVG path XPath. Returns True on success."""
     if not _driver_window_open(driver):
         print("  End chat skipped: browser window is closed.")
         return False
-    print("  Ending current chat session: click Menu then End chat...")
+    print("  Ending current chat session via embedded-messaging End chat path...")
     end_at = time.time() + timeout_s
-    saw_menu_opened = False
+    last_error = None
     while time.time() < end_at:
-        driver.switch_to.default_content()
-        state = _try_click_end_chat_in_current_context(driver)
-        if state == "menu_opened":
-            saw_menu_opened = True
-            time.sleep(0.35)
-        if state == "ended":
-            time.sleep(1)
-            driver.switch_to.default_content()
-            print("  End chat clicked successfully.")
-            return True
-
         try:
-            iframes = driver.find_elements(By.TAG_NAME, "iframe")
-        except Exception:
-            iframes = []
-        for iframe in iframes:
+            driver.switch_to.default_content()
+            iframe = WebDriverWait(driver, 3).until(
+                EC.presence_of_element_located((By.XPATH, EMBEDDED_MESSAGING_IFRAME_XPATH))
+            )
+            driver.switch_to.frame(iframe)
+
+            end_path = WebDriverWait(driver, 3).until(
+                EC.presence_of_element_located((By.XPATH, END_CHAT_PATH_XPATH))
+            )
+            clicked = False
             try:
-                driver.switch_to.frame(iframe)
-                state = _try_click_end_chat_in_current_context(driver)
-                if state == "menu_opened":
-                    saw_menu_opened = True
-                    time.sleep(0.35)
-                if state == "ended":
-                    driver.switch_to.default_content()
-                    time.sleep(1)
-                    print("  End chat clicked successfully.")
-                    return True
+                ActionChains(driver).move_to_element(end_path).pause(0.1).click().perform()
+                clicked = True
+            except Exception:
+                try:
+                    end_path.click()
+                    clicked = True
+                except Exception:
+                    # Prefer clicking parent button if the SVG path itself is not clickable.
+                    try:
+                        parent = end_path.find_element(By.XPATH, "./ancestor::button[1]")
+                        ActionChains(driver).move_to_element(parent).pause(0.1).click().perform()
+                        clicked = True
+                    except Exception as click_exc:
+                        last_error = click_exc
+                        try:
+                            driver.execute_script("arguments[0].click();", end_path)
+                            clicked = True
+                        except Exception as js_exc:
+                            last_error = js_exc
+
+            driver.switch_to.default_content()
+            if clicked:
+                time.sleep(1)
+                print("  End chat clicked successfully.")
+                return True
+        except Exception as exc:
+            last_error = exc
+            try:
+                driver.switch_to.default_content()
             except Exception:
                 pass
-            finally:
-                driver.switch_to.default_content()
+        time.sleep(0.4)
 
-        time.sleep(0.35)
-
-    if saw_menu_opened:
-        print("  Opened header menu but could not click 'End chat'.")
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+    if last_error is not None:
+        print(f"  Could not click End chat path: {last_error}")
     else:
-        print("  Could not find Joe header menu ('...') to end chat.")
+        print("  Could not find embedded-messaging iframe / End chat path.")
     return False
 
-def _should_reset_chat_session_after_prompt(append_perf, i, total_prompts):
-    """End chat after each prompt when more executions remain."""
+
+def _should_reset_chat_session_after_prompt(
+    append_perf, i, prompts, object_types=None
+):
+    """Refresh only after all samples for the current object prompt are done.
+
+    Keep the chat open across the N performance samples of the same
+    (object_type, prompt). When the next execution is a different prompt/object
+    (or there is no next), signal a page refresh for the next object.
+    """
     if not append_perf:
         return False
-    return i < total_prompts - 1
+    if i >= len(prompts) - 1:
+        return False
+    if object_types is None or i >= len(object_types) or (i + 1) >= len(object_types):
+        # Without object types, treat every execution as its own group.
+        return True
+    return (object_types[i + 1], prompts[i + 1]) != (object_types[i], prompts[i])
+
+
+def _refresh_page_for_next_object(driver):
+    """Hard refresh between object prompt groups so the next object starts clean."""
+    print("  Object samples complete — refreshing page before next prompt...")
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+    try:
+        driver.refresh()
+        time.sleep(CHAT_RECOVERY_SLEEP_SECONDS)
+        print("  Page refreshed for next object prompt.")
+        return True
+    except Exception as exc:
+        print(f"  Page refresh failed: {exc}")
+        return False
 
 
 def _is_interactable(el):
@@ -2746,7 +2700,7 @@ def main(argv=None):
             object_type = object_types[i] if append_perf and i < len(object_types) else ""
             sample_num = sample_nums[i] if append_perf and i < len(sample_nums) else ""
             should_reset_session = _should_reset_chat_session_after_prompt(
-                append_perf, i, len(prompts)
+                append_perf, i, prompts, object_types if append_perf else None
             )
             print(f"\n[{i+1}/{len(prompts)}] {prompt[:60]}...")
             t0 = None
@@ -2932,7 +2886,8 @@ def main(argv=None):
                             allure_cases_failed += 1
                         active_allure_group = None
 
-            # Before next prompt: wait for ready event, then end chat after each execution.
+            # Keep chat open across the 3 samples of one object prompt.
+            # After the last sample of that object, refresh before the next object.
             if i < len(prompts) - 1:
                 wait_for_console_ready_event(
                     driver,
@@ -2940,12 +2895,22 @@ def main(argv=None):
                     since_ms=start_ms if t0 is not None else 0,
                 )
                 if should_reset_session:
-                    if end_chat_session_from_header(driver):
+                    if _refresh_page_for_next_object(driver):
                         chat_is_open = False
                         try:
                             driver.get_log("browser")
                         except Exception:
                             pass
+                    else:
+                        # Fallback: try End chat if refresh fails.
+                        if end_chat_session_from_header(driver):
+                            chat_is_open = False
+                            try:
+                                driver.get_log("browser")
+                            except Exception:
+                                pass
+                else:
+                    print("  Keeping chat open for next performance sample...")
 
     except KeyboardInterrupt:
         print("\nRun interrupted; finalizing partial results...")

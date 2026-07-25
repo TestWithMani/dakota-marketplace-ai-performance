@@ -96,7 +96,7 @@ pipeline {
 
     environment {
         VENV_PY              = "${WORKSPACE}\\venv\\Scripts\\python.exe"
-        REPO_URL             = 'https://github.com/TestWithMani/dakota_gpt_performance.git'
+        REPO_URL             = 'https://github.com/TestWithMani/dakota-marketplace-ai-performance.git'
         DAKOTA_CREDENTIAL_ID = 'sf-marketplace-creds'
         ALLURE_VERSION       = '2.32.0'
         ALLURE_HOME          = "${WORKSPACE}\\tools\\allure-${ALLURE_VERSION}"

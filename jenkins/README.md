@@ -23,7 +23,7 @@ $env:JENKINS_PASSWORD = 'your-jenkins-password'
 ```
 
 Or manually: **New Item → Pipeline → Pipeline script from SCM → Git**  
-Repository: `https://github.com/TestWithMani/dakota_gpt_performance`  
+Repository: `https://github.com/TestWithMani/dakota-marketplace-ai-performance`  
 Branch: `main`  
 Script Path: `Jenkinsfile`
 
